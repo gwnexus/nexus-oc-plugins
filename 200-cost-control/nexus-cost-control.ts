@@ -371,7 +371,7 @@ async function appendCostEntry(
   const payload = {
     action: "session_append",
     session_id: sessionId,
-    entry_type: "note",
+    entry_type: "cost_snapshot",
     summary,
     metadata: JSON.stringify({
       plugin: PLUGIN_META.name,
@@ -445,8 +445,9 @@ export const NexusCostControl: Plugin = async (ctx) => {
    * not on every idle event. We track the last append time and only write to
    * Nexus if at least IDLE_DEBOUNCE_MS have passed since the last one.
    */
-  const IDLE_DEBOUNCE_MS = 5 * 60 * 1000 // 5 minutes
-  let lastAppendAt: number | null = null
+const IDLE_DEBOUNCE_MS = 5 * 60 * 1000 // 5 minutes
+let lastAppendAt: number | null = null
+let lastAppendedTokens: number | null = null
 
   return {
     /**
@@ -580,9 +581,16 @@ export const NexusCostControl: Plugin = async (ctx) => {
           return
         }
 
+        // Delta check: skip if token count hasn't changed since last snapshot
+        if (lastAppendedTokens !== null && cost.totalTokens === lastAppendedTokens) {
+          fileLog(directory, "debug", `session.idle — skipping (no token delta, still ${cost.totalTokens})`)
+          return
+        }
+
         await appendCostEntry(nexusConfig, state.sessionId, cost, directory)
 
         lastAppendAt = Date.now()
+        lastAppendedTokens = cost.totalTokens
 
         fileLog(directory, "info", `Cost entry recorded — $${cost.costUsd.toFixed(6)} / ${cost.totalTokens} tokens`)
         await client.app.log({
