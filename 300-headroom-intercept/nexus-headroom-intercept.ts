@@ -1,5 +1,5 @@
 import { type Plugin } from "@opencode-ai/plugin"
-import { writeFileSync, readFileSync, mkdirSync, appendFileSync } from "node:fs"
+import { writeFileSync, readFileSync, mkdirSync, appendFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { createHash } from "node:crypto"
 
@@ -565,6 +565,103 @@ function compressFallback(raw: string, hash: string, tool: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Project context discovery
+// ---------------------------------------------------------------------------
+
+interface NexusConfig {
+  apiUrl: string
+  token: string
+}
+
+interface ProjectContext {
+  projectId: string
+  plugins: string[]
+  headroomEnabled: boolean
+}
+
+/**
+ * Read Nexus API credentials from env or ~/.config/nexus/ TOML files.
+ * Same pattern used by nexus-compaction-plus and nexus-cost-control.
+ */
+function getNexusConfig(directory: string): NexusConfig | null {
+  const apiUrl = process.env.NEXUS_API_URL
+  const token = process.env.NEXUS_PRIVATE_TOKEN
+  if (apiUrl && token) return { apiUrl, token }
+
+  // Fallback: ~/.config/nexus/ TOML files
+  try {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? ""
+    const configDir = join(home, ".config", "nexus")
+    const configPath = join(configDir, "config.toml")
+    const credsPath = join(configDir, "credentials.toml")
+
+    let resolvedUrl = apiUrl
+    let resolvedToken = token
+
+    if (!resolvedUrl && existsSync(configPath)) {
+      const raw = readFileSync(configPath, "utf-8")
+      const match = raw.match(/api_url\s*=\s*"([^"]+)"/)
+      if (match) resolvedUrl = match[1]
+    }
+    if (!resolvedToken && existsSync(credsPath)) {
+      const raw = readFileSync(credsPath, "utf-8")
+      const match = raw.match(/private_token\s*=\s*"([^"]+)"/)
+      if (match) resolvedToken = match[1]
+    }
+
+    if (resolvedUrl && resolvedToken) return { apiUrl: resolvedUrl, token: resolvedToken }
+  } catch {
+    // Silent
+  }
+  return null
+}
+
+/**
+ * Extract project_id from .nexus/AGENTS.md YAML frontmatter.
+ */
+function readProjectIdFromAgentsMd(directory: string): string | null {
+  try {
+    const agentsPath = join(directory, ".nexus", "AGENTS.md")
+    if (!existsSync(agentsPath)) return null
+    const raw = readFileSync(agentsPath, "utf-8")
+    // Parse YAML frontmatter between --- markers
+    const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/)
+    if (!fmMatch) return null
+    const pidMatch = fmMatch[1].match(/project_id:\s*([0-9a-f-]{36})/)
+    return pidMatch ? pidMatch[1] : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Query the Nexus Preflight API to check if headroom is enabled for this project.
+ * Returns the full project context with plugin list.
+ */
+async function fetchProjectContext(
+  config: NexusConfig,
+  projectId: string,
+): Promise<ProjectContext | null> {
+  try {
+    const url = `${config.apiUrl}/api/projects/${projectId}/preflight`
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${config.token}` },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const plugins: string[] = Array.isArray(data.plugins) ? data.plugins : []
+    return {
+      projectId,
+      plugins,
+      headroomEnabled: plugins.includes("headroom"),
+    }
+  } catch {
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
 
@@ -572,8 +669,42 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
   const { client, directory } = ctx
 
   // Resolve mode from env or default
-  const mode: PluginMode =
+  let mode: PluginMode =
     (process.env.HEADROOM_MODE as PluginMode) ?? DEFAULT_MODE
+
+  // ---------------------------------------------------------------------------
+  // Project context gate: check if headroom is enabled for this project
+  // ---------------------------------------------------------------------------
+  const projectId = readProjectIdFromAgentsMd(directory)
+  let projectContext: ProjectContext | null = null
+
+  if (projectId) {
+    const nexusConfig = getNexusConfig(directory)
+    if (nexusConfig) {
+      projectContext = await fetchProjectContext(nexusConfig, projectId)
+      if (projectContext && !projectContext.headroomEnabled) {
+        // Headroom not enabled in project backend — disable transform, observe only
+        client.app.log(
+          `[${PLUGIN_META.name}] v${PLUGIN_META.version} — headroom not enabled ` +
+          `for project ${projectId}, running in observe-only mode`
+        )
+        fileLog(
+          directory,
+          `Project gate: headroom not in project plugins ` +
+          `(${projectContext.plugins.join(", ")}), forcing observe-only mode`
+        )
+        mode = "observe"
+      } else if (projectContext) {
+        fileLog(directory, `Project gate: headroom enabled (project=${projectId})`)
+      } else {
+        fileLog(directory, `Project gate: preflight API unreachable, proceeding with configured mode=${mode}`)
+      }
+    } else {
+      fileLog(directory, `Project gate: no Nexus API credentials, proceeding with configured mode=${mode}`)
+    }
+  } else {
+    fileLog(directory, `Project gate: no project_id found in .nexus/AGENTS.md, proceeding with configured mode=${mode}`)
+  }
 
   // Initialize stores
   const store = new OriginalStore(directory)
@@ -589,10 +720,11 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
   // Startup logging
   client.app.log(
     `[${PLUGIN_META.name}] v${PLUGIN_META.version} loaded — mode=${mode}, ` +
+    `project=${projectId ?? "unknown"}, ` +
     `policies=${Object.keys(POLICIES).length}, ` +
     `minTokens=${DEFAULT_MIN_TOKENS}`
   )
-  fileLog(directory, `Plugin loaded: mode=${mode}, version=${PLUGIN_META.version}`)
+  fileLog(directory, `Plugin loaded: mode=${mode}, version=${PLUGIN_META.version}, project=${projectId ?? "unknown"}`)
 
   return {
     // -----------------------------------------------------------------------
