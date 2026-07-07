@@ -16,20 +16,19 @@ import { createHash } from "node:crypto"
 /**
  * Plugin metadata — single source of truth for name/version.
  *
- * Version: 0.4.0
- * Changes from 0.3.0:
- *   - DEFAULT_MODE changed from "transform" to "observe" (safe default)
- *   - normalizeToolResult: full content[] shape support with non-text part preservation
- *   - negative-savings guard: skip transform when compact >= original
- *   - plugin-owned nexus_headroom_intercept_retrieve tool (retrieval bridge)
- *   - OpenCode SDK version guard
- *   - disk cache: TTL eviction (24h), quota (100MB), restrictive permissions, .gitignore enforcement
- *   - structured JSONL logging with size-based rotation (10MB, 3 files)
- *   - metric names clarified: potential_saved_tokens vs confirmed
+ * Version: 0.5.0
+ * Changes from 0.4.0:
+ *   - Fix: isError responses pass through without compression (never summarize error payloads)
+ *   - Fix: store.set() moved after no-gain guard — originals only stored when transform will occur
+ *   - Fix: observe mode skips disk persistence by default (metrics only)
+ *   - Fix: OriginalStore.get() enforces TTL — expired entries deleted on access
+ *   - Fix: evictDisk() sorts newest-first to keep newest CACHE_MAX_ENTRIES entries
+ *   - Fix: bounded retrieval — max_lines/max_chars defaults, no full dump on zero match
+ *   - Fix: confirmedTransforms renamed to locallyAppliedTransforms
  */
 const PLUGIN_META = {
   name: "nexus-headroom-intercept",
-  version: "0.4.0",
+  version: "0.5.0",
   description:
     "Pre-injection context compression for Nexus MCP tool outputs. " +
     "Uses the tool.execute.after hook to apply policy-based deterministic " +
@@ -102,7 +101,8 @@ interface SessionMetrics {
   totalNoGain: number
   totalUnsupportedShapes: number
   potentialSavedTokens: number
-  confirmedTransforms: number
+  /** Local object mutations that completed without error — NOT provider-confirmed. */
+  locallyAppliedTransforms: number
   events: CompressionEvent[]
 }
 
@@ -363,11 +363,27 @@ class OriginalStore {
   }
 
   get(hash: string): string | null {
+    // Check in-memory first, but still validate TTL
     const cached = this.cache.get(hash)
-    if (cached) return cached
+    if (cached !== undefined) {
+      // Validate against disk entry's storedAt for TTL
+      const expired = this.isDiskEntryExpired(hash)
+      if (expired) {
+        this.cache.delete(hash)
+        this.deleteDiskEntry(hash)
+        return null
+      }
+      return cached
+    }
+    // Disk fallback with TTL check
     try {
       const filePath = join(this.cacheDir, `${hash}.json`)
       if (!existsSync(filePath)) return null
+      const st = statSync(filePath)
+      if ((Date.now() - st.mtimeMs) > CACHE_TTL_MS) {
+        this.deleteDiskEntry(hash)
+        return null
+      }
       const raw = readFileSync(filePath, "utf-8")
       const data = JSON.parse(raw)
       if (data?.content) {
@@ -376,6 +392,18 @@ class OriginalStore {
       }
     } catch {}
     return null
+  }
+
+  private isDiskEntryExpired(hash: string): boolean {
+    try {
+      const filePath = join(this.cacheDir, `${hash}.json`)
+      if (!existsSync(filePath)) return false
+      return (Date.now() - statSync(filePath).mtimeMs) > CACHE_TTL_MS
+    } catch { return false }
+  }
+
+  private deleteDiskEntry(hash: string): void {
+    try { unlinkSync(join(this.cacheDir, `${hash}.json`)) } catch {}
   }
 
   /** Prune in-memory cache (FIFO, max 50 entries). */
@@ -387,7 +415,7 @@ class OriginalStore {
     }
   }
 
-  /** Evict disk entries older than TTL or exceeding quota. */
+  /** Evict disk entries older than TTL or exceeding quota. Keeps newest entries. */
   evictDisk(): void {
     try {
       const files = readdirSync(this.cacheDir).filter(f => f.endsWith(".json"))
@@ -404,19 +432,22 @@ class OriginalStore {
         } catch {}
       }
 
-      // Sort oldest first
-      entries.sort((a, b) => a.mtime - b.mtime)
+      // Sort newest-first — we want to keep the newest CACHE_MAX_ENTRIES
+      entries.sort((a, b) => b.mtime - a.mtime)
 
-      for (const entry of entries) {
+      entries.forEach((entry, idx) => {
         const expired = (now - entry.mtime) > CACHE_TTL_MS
-        const overQuota = totalBytes > CACHE_MAX_BYTES || entries.indexOf(entry) >= CACHE_MAX_ENTRIES
-        if (expired || overQuota) {
+        // After keeping the first CACHE_MAX_ENTRIES newest entries,
+        // delete the rest; also delete if quota is exceeded.
+        const overCount = idx >= CACHE_MAX_ENTRIES
+        const overBytes = totalBytes > CACHE_MAX_BYTES
+        if (expired || overCount || overBytes) {
           try {
             unlinkSync(entry.file)
             totalBytes -= entry.size
           } catch {}
         }
-      }
+      })
     } catch {}
   }
 }
@@ -897,7 +928,7 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
     totalNoGain: 0,
     totalUnsupportedShapes: 0,
     potentialSavedTokens: 0,
-    confirmedTransforms: 0,
+    locallyAppliedTransforms: 0,
     events: [],
   }
 
@@ -941,7 +972,13 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
           },
           required: ["hash"],
         },
-        execute: async ({ hash, query }: { hash: string; query?: string }) => {
+        execute: async ({ hash, query, max_lines, max_chars, allow_full }: {
+          hash: string
+          query?: string
+          max_lines?: number
+          max_chars?: number
+          allow_full?: boolean
+        }) => {
           const content = store.get(hash)
           if (!content) {
             return {
@@ -952,19 +989,45 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
                 "this hash was generated in a previous session. Re-fetch using the original tool.",
             }
           }
+
+          const effectiveMaxLines = max_lines ?? 100
+          const effectiveMaxChars = max_chars ?? 12000
+
           if (query && query.trim()) {
-            // Simple line-level filter: return lines that match the query
             const qLower = query.toLowerCase()
             const lines = content.split("\n")
             const matched = lines.filter(l => l.toLowerCase().includes(qLower))
+            if (matched.length === 0) {
+              return {
+                found: true,
+                hash,
+                query,
+                matched_lines: 0,
+                content: null,
+                message: "No lines matched the query. Refine the query or omit it to retrieve a bounded excerpt.",
+              }
+            }
+            const bounded = matched.slice(0, effectiveMaxLines).join("\n").slice(0, effectiveMaxChars)
+            return { found: true, hash, query, matched_lines: matched.length, content: bounded }
+          }
+
+          // No query — return bounded excerpt unless allow_full=true
+          if (!allow_full) {
+            const lines = content.split("\n")
+            const excerpt = lines.slice(0, effectiveMaxLines).join("\n").slice(0, effectiveMaxChars)
+            const truncated = excerpt.length < content.length
             return {
               found: true,
               hash,
-              query,
-              matched_lines: matched.length,
-              content: matched.length > 0 ? matched.join("\n") : content,
+              content: excerpt,
+              truncated,
+              total_chars: content.length,
+              message: truncated
+                ? `Showing first ${effectiveMaxLines} lines / ${effectiveMaxChars} chars. Pass allow_full=true for the complete original.`
+                : undefined,
             }
           }
+
           return { found: true, hash, content }
         },
       },
@@ -991,7 +1054,14 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
       if (policy.action === "skip") { metrics.totalSkips++; return }
       if (policy.action === "passthrough") { metrics.totalPassthroughs++; return }
 
-      // Fix 3: normalize tool result — handles both output.output and content[]
+      // Fix: never compress error responses — error payloads must be preserved verbatim
+      const rawOut = output as unknown as ToolOutput
+      if (rawOut.isError === true) {
+        metrics.totalPassthroughs++
+        return
+      }
+
+      // Normalize tool result — handles both output.output and content[]
       const normalized = normalizeToolResult(output)
 
       if (!normalized.supported || !normalized.text) {
@@ -1009,17 +1079,12 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
       }
 
       const hash = contentHash(normalized.text)
-
-      // Store original before any mutation
-      store.set(hash, normalized.text)
-      store.prune()
-
       const profile = policy.profile ?? "reference-data"
       const compact = compressByProfile(normalized.text, profile, hash, toolName)
       const compressedTokens = estimateTokens(compact)
       const savedTokens = estimatedTokens - compressedTokens
 
-      // Fix 2: negative-savings guard — skip if no meaningful gain
+      // Negative-savings guard — evaluate before storing to avoid unnecessary disk writes
       const savingRatio = savedTokens / estimatedTokens
       if (compressedTokens >= estimatedTokens || savingRatio < MINIMUM_SAVING_RATIO) {
         metrics.totalNoGain++
@@ -1030,6 +1095,13 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
           savingRatio: savingRatio.toFixed(3),
         })
         return
+      }
+
+      // Store original only after confirming transform is worthwhile.
+      // In observe mode: skip disk persistence (metrics only).
+      if (mode === "transform") {
+        store.set(hash, normalized.text)
+        store.prune()
       }
 
       const event: CompressionEvent = {
@@ -1054,7 +1126,7 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
           normalized.apply(compact)
           event.transformed = true
           metrics.totalCompressions++
-          metrics.confirmedTransforms++
+          metrics.locallyAppliedTransforms++
           logger.log("info", "transform", {
             tool: toolName,
             originalTokens: estimatedTokens,
@@ -1098,7 +1170,7 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
         logger.log("info", "session_summary", {
           mode,
           compressions: metrics.totalCompressions,
-          confirmedTransforms: metrics.confirmedTransforms,
+          locallyAppliedTransforms: metrics.locallyAppliedTransforms,
           observations: metrics.totalObservations,
           skips: metrics.totalSkips,
           passthroughs: metrics.totalPassthroughs,

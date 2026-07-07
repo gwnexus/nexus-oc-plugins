@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-07-07
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.0** — release correctness and retrieval/storage safety fixes (v0.4.0 release assessment)
+  - **isError passthrough:** error responses (`isError === true`) are never compressed — error payloads preserved verbatim
+  - **store.set() reordered:** originals stored only after no-gain guard passes and only in transform mode; observe mode skips disk persistence entirely
+  - **TTL enforced at retrieval:** `OriginalStore.get()` checks file mtime against 24h TTL, deletes expired entries on access
+  - **Eviction order fixed:** `evictDisk()` sorts newest-first, keeping the 200 newest entries (was: keeping oldest)
+  - **Bounded retrieval:** `nexus_headroom_intercept_retrieve` now accepts `max_lines` (default 100), `max_chars` (default 12000), `allow_full` (default false); zero-match queries return metadata instead of full original
+  - **Metric rename:** `confirmedTransforms` → `locallyAppliedTransforms` (clarifies local-mutation-only semantics, not provider-confirmed)
+  - **Component README rewritten:** correct default mode (observe), correct retrieval tool name, compatibility matrix, storage behaviour, retrieval parameter table
+  - **Root README:** version updated to `v0.5.0`
+
 ## [1.4.0] - 2026-07-07
 
 ### Changed
