@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-07-07
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.2** — SDK guard, atomic writes, project-namespace, and multipart documentation
+  - **SDK version guard (6.3):** `checkSdkVersion()` now reads the *installed* SDK version from `.opencode/node_modules/@opencode-ai/plugin/package.json` (exact installed version); declared `package.json` range used only as fallback. Log events include a `source` field (`installed` or `declared-range`) for auditability.
+  - **Atomic cache writes (6.5a):** `OriginalStore.set()` writes to a `.tmp` file first, then calls `renameSync()` to atomically replace the target. Stale `.tmp` files are cleaned up in `evictDisk()` on startup. Prevents corrupt cache entries on process interruption.
+  - **Project-namespaced cache (6.5b):** cache path changed from `.nexus/headroom-cache/<hash>.json` to `.nexus/headroom-cache/<projectId>/<hash>.json`. Prevents cross-project cache reads when multiple projects share the same machine. Falls back to `"unknown"` namespace when project ID is unavailable.
+  - **Multipart ordering (6.6):** behaviour documented as a known limitation in `normalizeToolResult()` — text parts are consolidated at `content[0]`, non-text parts are preserved but original interleaved ordering is not maintained. Acceptable for Nexus MCP text-centric responses.
+
 ## [1.5.1] - 2026-07-07
 
 ### Changed

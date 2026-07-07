@@ -9,22 +9,24 @@ import {
   statSync,
   unlinkSync,
   chmodSync,
+  renameSync,
 } from "node:fs"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
 import { createHash } from "node:crypto"
 
 /**
  * Plugin metadata — single source of truth for name/version.
  *
- * Version: 0.5.1
- * Changes from 0.5.0:
- *   - Fix 6.4a: max_lines/max_chars clamped to server-controlled hard limits (1-1000 / 1-100000)
- *   - Fix 6.4b: all retrieval responses include returned_lines and returned_chars metadata
- *   - Fix 6.5: hash input validated as 64-char hex before any file-system access
+ * Version: 0.5.2
+ * Changes from 0.5.1:
+ *   - Fix 6.3: checkSdkVersion reads installed version from node_modules, not declared range
+ *   - Fix 6.5a: atomic cache writes via tmp-file + renameSync (no corrupt entries on crash)
+ *   - Fix 6.5b: project-scoped cache path — headroom-cache/<projectId>/<hash>.json
+ *   - Fix 6.6: multipart content ordering documented as known limitation (comment)
  */
 const PLUGIN_META = {
   name: "nexus-headroom-intercept",
-  version: "0.5.1",
+  version: "0.5.2",
   description:
     "Pre-injection context compression for Nexus MCP tool outputs. " +
     "Uses the tool.execute.after hook to apply policy-based deterministic " +
@@ -237,7 +239,10 @@ function normalizeToolResult(output: unknown): NormalizedToolResult {
     return {
       text: textParts.map((p: any) => p.text).join("\n"),
       apply(replacement: string) {
-        // Replace all text parts with the compact result, preserve non-text parts
+        // Replace all text parts with one compact text part; preserve non-text parts (image, resource).
+        // Known limitation: original interleaved ordering of text/non-text parts is not preserved —
+        // the compact text is always placed at index 0. This is acceptable for Nexus MCP responses
+        // which are text-centric, but is not a generic MCP guarantee.
         result.content = [
           { type: "text", text: replacement },
           ...nonTextParts,
@@ -309,7 +314,8 @@ class StructuredLogger {
 }
 
 // ---------------------------------------------------------------------------
-// OriginalStore — Fix 6: TTL eviction, quota, permissions, .gitignore
+// OriginalStore — TTL eviction, quota, permissions, .gitignore,
+//                 project-namespace (6.5b), atomic writes (6.5a)
 // ---------------------------------------------------------------------------
 
 class OriginalStore {
@@ -317,12 +323,22 @@ class OriginalStore {
   private cacheDir: string
   private projectDir: string
 
-  constructor(projectDir: string) {
+  /**
+   * @param projectDir  Root of the OpenCode project (ctx.directory)
+   * @param projectId   Nexus project UUID — used to namespace cache entries so
+   *                    multiple projects on the same machine never share cache state.
+   *                    Falls back to "unknown" when the project ID is unavailable.
+   */
+  constructor(projectDir: string, projectId: string | null) {
     this.projectDir = projectDir
-    this.cacheDir = join(projectDir, ".nexus", "headroom-cache")
+    // Fix 6.5b: project-scoped subdirectory prevents cross-project cache reads
+    const ns = projectId ?? "unknown"
+    this.cacheDir = join(projectDir, ".nexus", "headroom-cache", ns)
     try {
       mkdirSync(this.cacheDir, { recursive: true })
       chmodSync(this.cacheDir, 0o700)
+      // Also chmod the parent headroom-cache directory
+      try { chmodSync(join(projectDir, ".nexus", "headroom-cache"), 0o700) } catch {}
       this.ensureGitignore()
     } catch {}
   }
@@ -345,24 +361,30 @@ class OriginalStore {
 
   set(hash: string, content: string): void {
     this.cache.set(hash, content)
+    // Fix 6.5a: atomic write — write to a .tmp file first, then rename.
+    // Prevents partial/corrupt cache entries if the process is interrupted mid-write.
     try {
       const filePath = join(this.cacheDir, `${hash}.json`)
-      writeFileSync(filePath, JSON.stringify({
+      const tmpPath  = join(this.cacheDir, `${hash}.json.tmp`)
+      writeFileSync(tmpPath, JSON.stringify({
         hash,
         length: content.length,
         estimatedTokens: estimateTokens(content),
         storedAt: new Date().toISOString(),
         content,
       }))
-      chmodSync(filePath, 0o600)
-    } catch {}
+      chmodSync(tmpPath, 0o600)
+      renameSync(tmpPath, filePath)
+    } catch {
+      // Cleanup stale tmp file if rename failed
+      try { unlinkSync(join(this.cacheDir, `${hash}.json.tmp`)) } catch {}
+    }
   }
 
   get(hash: string): string | null {
     // Check in-memory first, but still validate TTL
     const cached = this.cache.get(hash)
     if (cached !== undefined) {
-      // Validate against disk entry's storedAt for TTL
       const expired = this.isDiskEntryExpired(hash)
       if (expired) {
         this.cache.delete(hash)
@@ -414,7 +436,13 @@ class OriginalStore {
   /** Evict disk entries older than TTL or exceeding quota. Keeps newest entries. */
   evictDisk(): void {
     try {
-      const files = readdirSync(this.cacheDir).filter(f => f.endsWith(".json"))
+      // Also clean up any stale .tmp files from interrupted writes
+      const allFiles = readdirSync(this.cacheDir)
+      for (const f of allFiles.filter(f => f.endsWith(".tmp"))) {
+        try { unlinkSync(join(this.cacheDir, f)) } catch {}
+      }
+
+      const files = allFiles.filter(f => f.endsWith(".json"))
       const now = Date.now()
       let totalBytes = 0
       const entries: { file: string; mtime: number; size: number }[] = []
@@ -819,33 +847,62 @@ async function fetchProjectContext(config: NexusConfig, projectId: string): Prom
 }
 
 // ---------------------------------------------------------------------------
-// OpenCode SDK version guard — Fix 5
+// OpenCode SDK version guard — Fix 6.3 (v0.5.2)
+// Reads the *installed* SDK version from node_modules, not the declared range
+// in package.json. A declared range like "^1.14.0" may resolve to any version
+// >= 1.14.0; reading the installed package.json gives the exact installed version.
 // ---------------------------------------------------------------------------
 
 function checkSdkVersion(ctx: any, logger: StructuredLogger): boolean {
   try {
-    // Try to read SDK version from package.json in .opencode/
-    const pkgPath = join(ctx.directory, ".opencode", "package.json")
-    if (!existsSync(pkgPath)) {
+    // Primary: read the installed package version from node_modules
+    const installedPkgPath = join(
+      ctx.directory, ".opencode", "node_modules",
+      "@opencode-ai", "plugin", "package.json"
+    )
+    // Fallback: declared range in .opencode/package.json (less precise but better than nothing)
+    const declaredPkgPath = join(ctx.directory, ".opencode", "package.json")
+
+    let sdkVersion = ""
+    let source = "unknown"
+
+    if (existsSync(installedPkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(installedPkgPath, "utf-8"))
+        if (typeof pkg.version === "string") {
+          sdkVersion = pkg.version
+          source = "installed"
+        }
+      } catch {}
+    }
+
+    if (!sdkVersion && existsSync(declaredPkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(declaredPkgPath, "utf-8"))
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies }
+        const declared: string = deps["@opencode-ai/plugin"] ?? ""
+        if (declared) {
+          // Strip range operators to get the minimum declared version
+          sdkVersion = declared.replace(/^[\^~>=<\s]+/, "").split(/\s/)[0]
+          source = "declared-range"
+        }
+      } catch {}
+    }
+
+    if (!sdkVersion) {
       logger.log("warn", "sdk_version_unknown", {
-        reason: ".opencode/package.json not found",
+        reason: "neither installed nor declared SDK version found",
         fallback: "observe",
       })
       return false
     }
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"))
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies }
-    const sdkVersion: string = deps["@opencode-ai/plugin"] ?? ""
-    if (!sdkVersion) {
-      logger.log("warn", "sdk_version_unknown", { reason: "@opencode-ai/plugin not in package.json", fallback: "observe" })
-      return false
-    }
-    // Parse semver (handles ^1.14.31, ~1.14.0, 1.14.31, etc.)
-    const match = sdkVersion.replace(/^[\^~>=<]+/, "").match(/^(\d+)\.(\d+)/)
+
+    const match = sdkVersion.match(/^(\d+)\.(\d+)/)
     if (!match) {
-      logger.log("warn", "sdk_version_parse_failed", { sdkVersion, fallback: "observe" })
+      logger.log("warn", "sdk_version_parse_failed", { sdkVersion, source, fallback: "observe" })
       return false
     }
+
     const major = parseInt(match[1], 10)
     const minor = parseInt(match[2], 10)
     const compatible =
@@ -855,11 +912,12 @@ function checkSdkVersion(ctx: any, logger: StructuredLogger): boolean {
     if (!compatible) {
       logger.log("warn", "sdk_version_incompatible", {
         sdkVersion,
+        source,
         required: `>=${REQUIRED_SDK_MAJOR}.${REQUIRED_SDK_MINOR}`,
         fallback: "observe",
       })
     } else {
-      logger.log("info", "sdk_version_ok", { sdkVersion })
+      logger.log("info", "sdk_version_ok", { sdkVersion, source })
     }
     return compatible
   } catch {
@@ -911,7 +969,7 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
     logger.log("warn", "project_gate_no_project_id", { mode })
   }
 
-  const store = new OriginalStore(directory)
+  const store = new OriginalStore(directory, projectId)
 
   // Periodic disk eviction (fire and forget)
   try { store.evictDisk() } catch {}
