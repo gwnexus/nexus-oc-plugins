@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-07
+
+### Changed
+- **`nexus-headroom-intercept` v0.3.0** — bug fixes and policy improvements
+  - **Fix:** `getNexusConfig` read `private_token` from `credentials.toml` but
+    the actual key is `token`; project-gate preflight was always bypassed
+  - **Fix:** `compressReferenceData` had no handling for single-entity `kb_get`
+    responses (ADR, Task, Session, ingest_item) — produced near-empty output
+    (ratio ~0.01). Added four shape branches: memory-dump (A), document-wrapper
+    with excerpt (B), generic entity (C), unknown-structure fallback (D)
+  - **Threshold:** `nexus_kb_search` `minTokens` 3000 → 800 (search results
+    typically 700–900 tokens; threshold was never triggered)
+  - **Threshold:** `nexus_dispatch_sweep` `minTokens` 2000 → 500 (sweep
+    responses are rarely large; meaningful payloads should still compress)
+  - **Policies:** Added explicit `passthrough` for all Nexus write operations
+    (`session_create/append/close`, `task_create/update/note`, `adr_create/
+    submit/decide`, `doc_ingest/classify`, `dispatch_create/reply/resolve/close`)
+  - **Logging:** Removed per-call debug traces (`HOOK_CALLED`, `EXTRACT`,
+    full EVENT dumps) that generated 100 KB+ log files per session; kept only
+    TRANSFORM/OBSERVE/FAIL entries and the session-idle summary
+
 ## [1.2.0] - 2026-07-07
 
 ### Added

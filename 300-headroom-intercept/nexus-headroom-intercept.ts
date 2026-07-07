@@ -8,7 +8,7 @@ import { createHash } from "node:crypto"
  */
 const PLUGIN_META = {
   name: "nexus-headroom-intercept",
-  version: "0.1.0",
+  version: "0.3.0",
   description:
     "Pre-injection context compression for Nexus MCP tool outputs. " +
     "Uses the tool.execute.after hook to apply policy-based deterministic " +
@@ -21,6 +21,24 @@ const PLUGIN_META = {
 
 type PolicyAction = "compress" | "passthrough" | "skip"
 type CompressionProfile = "reference-data" | "structured-list" | "search-results"
+
+/**
+ * Extended output shape observed at runtime for MCP tool calls.
+ * The SDK type declares only { title, output, metadata } for tool.execute.after,
+ * but MCP tools in practice deliver results via a content[] array instead of output.
+ * This interface documents the actual runtime shape to reduce implicit `as any` usage.
+ */
+interface ToolOutput {
+  title?: string
+  output?: string
+  metadata?: unknown
+  /** Present for MCP tools — SDK type does not declare this field */
+  content?: Array<{ text?: string; type?: string }>
+  /** Present for native tools like read/bash */
+  attachments?: unknown
+  /** Present for some MCP tools that return errors */
+  isError?: boolean
+}
 
 interface Policy {
   action: PolicyAction
@@ -87,7 +105,7 @@ const POLICIES: Record<string, Policy> = {
   nexus_kb_search: {
     action: "compress",
     profile: "search-results",
-    minTokens: 3000,
+    minTokens: 800,  // reduced from 3000 — search results are typically 700-2000 tokens
   },
   nexus_kb_get: {
     action: "compress",
@@ -99,7 +117,7 @@ const POLICIES: Record<string, Policy> = {
   nexus_dispatch_sweep: {
     action: "compress",
     profile: "structured-list",
-    minTokens: 2000,
+    minTokens: 500,  // sweep responses rarely exceed 500 tokens; trigger on meaningful payloads
   },
   nexus_dispatch_inbox: {
     action: "compress",
@@ -111,11 +129,8 @@ const POLICIES: Record<string, Policy> = {
     profile: "structured-list",
     minTokens: 2000,
   },
-  nexus_session_list: {
-    action: "compress",
-    profile: "structured-list",
-    minTokens: 2000,
-  },
+  // session_list returns at most a handful of sessions — rarely exceeds threshold
+  nexus_session_list: { action: "passthrough", reason: "small-response" },
   nexus_doc_list: {
     action: "compress",
     profile: "structured-list",
@@ -126,6 +141,23 @@ const POLICIES: Record<string, Policy> = {
     profile: "structured-list",
     minTokens: 2000,
   },
+
+  // Write operations — never compress, small responses
+  nexus_session_create: { action: "passthrough", reason: "write-operation" },
+  nexus_session_append: { action: "passthrough", reason: "write-operation" },
+  nexus_session_close: { action: "passthrough", reason: "write-operation" },
+  nexus_task_create: { action: "passthrough", reason: "write-operation" },
+  nexus_task_update: { action: "passthrough", reason: "write-operation" },
+  nexus_task_note: { action: "passthrough", reason: "write-operation" },
+  nexus_adr_create: { action: "passthrough", reason: "write-operation" },
+  nexus_adr_submit: { action: "passthrough", reason: "write-operation" },
+  nexus_adr_decide: { action: "passthrough", reason: "write-operation" },
+  nexus_doc_ingest: { action: "passthrough", reason: "write-operation" },
+  nexus_doc_classify: { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_create: { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_reply: { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_resolve: { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_close: { action: "passthrough", reason: "write-operation" },
 
   // Explicit passthrough — never compress retrieval results
   nexus_headroom_retrieve: { action: "passthrough", reason: "explicit-detail-request" },
@@ -277,55 +309,41 @@ function compressReferenceData(
   if (parsed && typeof parsed === "object") {
     const obj = parsed as Record<string, unknown>
 
-    // Extract project info if present
-    if (obj.project_id) lines.push(`Project: ${obj.project_id}`)
-    if ((obj as any).memory?.project?.name) {
-      lines.push(`Project name: ${(obj as any).memory.project.name}`)
-    }
-
-    // Extract categories
-    if (Array.isArray((obj as any).categories_included)) {
-      lines.push(`Categories: ${(obj as any).categories_included.join(", ")}`)
-    }
-    if ((obj as any).depth) lines.push(`Depth: ${(obj as any).depth}`)
-
-    // Summarize memory sections
+    // ------------------------------------------------------------------
+    // Shape A: kb_memory response — has a `memory` sub-object
+    // ------------------------------------------------------------------
     const memory = (obj as any).memory
     if (memory && typeof memory === "object") {
+      if (obj.project_id) lines.push(`Project: ${obj.project_id}`)
+      if (memory.project?.name) lines.push(`Project name: ${memory.project.name}`)
+      if (Array.isArray((obj as any).categories_included)) {
+        lines.push(`Categories: ${(obj as any).categories_included.join(", ")}`)
+      }
+      if ((obj as any).depth) lines.push(`Depth: ${(obj as any).depth}`)
       lines.push("")
 
-      // ADRs
       if (Array.isArray(memory.adrs)) {
         lines.push(`## ADRs (${memory.adrs.length})`)
         for (const adr of memory.adrs.slice(0, 10)) {
-          const status = adr.status ?? "?"
-          const num = adr.adr_number ?? "?"
-          lines.push(`- ADR-${num}: ${adr.title} [${status}]`)
+          lines.push(`- ADR-${adr.adr_number ?? "?"}: ${adr.title} [${adr.status ?? "?"}]`)
         }
-        if (memory.adrs.length > 10) {
-          lines.push(`  ... and ${memory.adrs.length - 10} more`)
-        }
+        if (memory.adrs.length > 10) lines.push(`  ... and ${memory.adrs.length - 10} more`)
       }
 
-      // Tasks
       if (Array.isArray(memory.active_tasks)) {
         lines.push("")
         lines.push(`## Active Tasks (${memory.active_tasks.length})`)
         for (const task of memory.active_tasks) {
-          const prio = task.priority ?? "?"
-          const status = task.status ?? "?"
-          lines.push(`- [${prio}/${status}] ${task.title}`)
+          lines.push(`- [${task.priority ?? "?"}/${task.status ?? "?"}] ${task.title}`)
           if (task.id) lines.push(`  id: ${task.id}`)
         }
       }
 
-      // Sessions
       if (Array.isArray(memory.recent_sessions)) {
         lines.push("")
         lines.push(`## Recent Sessions (${memory.recent_sessions.length})`)
         for (const s of memory.recent_sessions.slice(0, 5)) {
-          const status = s.status ?? "?"
-          lines.push(`- [${status}] ${s.title} (${s.created_at?.slice(0, 10) ?? "?"})`)
+          lines.push(`- [${s.status ?? "?"}] ${s.title} (${s.created_at?.slice(0, 10) ?? "?"})`)
           if (s.id) lines.push(`  id: ${s.id}`)
         }
         if (memory.recent_sessions.length > 5) {
@@ -333,7 +351,6 @@ function compressReferenceData(
         }
       }
 
-      // Open letters / dispatches
       if (Array.isArray(memory.open_letters) && memory.open_letters.length > 0) {
         lines.push("")
         lines.push(`## Open Dispatches (${memory.open_letters.length})`)
@@ -342,36 +359,93 @@ function compressReferenceData(
         }
       }
 
-      // Planning
       if (Array.isArray(memory.planning) && memory.planning.length > 0) {
         lines.push("")
         lines.push(`## Planning Items (${memory.planning.length})`)
-        for (const p of memory.planning.slice(0, 5)) {
-          lines.push(`- ${p.title ?? "untitled"}`)
-        }
+        for (const p of memory.planning.slice(0, 5)) lines.push(`- ${p.title ?? "untitled"}`)
       }
 
-      // Research
       if (Array.isArray(memory.research) && memory.research.length > 0) {
         lines.push("")
         lines.push(`## Research Notes (${memory.research.length})`)
-        for (const r of memory.research.slice(0, 5)) {
-          lines.push(`- ${r.title ?? "untitled"}`)
+        for (const r of memory.research.slice(0, 5)) lines.push(`- ${r.title ?? "untitled"}`)
+      }
+
+    // ------------------------------------------------------------------
+    // Shape B: kb_get single-entity response — `document` wrapper
+    // ------------------------------------------------------------------
+    } else if (obj.entity_type && obj.document) {
+      const doc = obj.document as Record<string, unknown>
+      const etype = String(obj.entity_type)
+      lines.push(`Entity type: ${etype}`)
+      lines.push(`Entity id:   ${doc.id ?? obj.entity_id ?? "?"}`)
+      if (doc.title) lines.push(`Title:  ${doc.title}`)
+      if (doc.status) lines.push(`Status: ${doc.status}`)
+      if (doc.adr_number) lines.push(`ADR:    ADR-${doc.adr_number}`)
+      if (doc.priority) lines.push(`Priority: ${doc.priority}`)
+      if (doc.project_id) lines.push(`Project: ${doc.project_id}`)
+      if (doc.created_at) lines.push(`Created: ${String(doc.created_at).slice(0, 10)}`)
+
+      // Include a brief excerpt of the main body field (context / body / description)
+      const bodyField = (doc.context ?? doc.body ?? doc.description ?? doc.summary) as string | undefined
+      if (typeof bodyField === "string" && bodyField.length > 0) {
+        lines.push("")
+        lines.push("Excerpt:")
+        const excerpt = bodyField.replace(/\n+/g, " ").slice(0, 400)
+        lines.push(`  ${excerpt}${bodyField.length > 400 ? "..." : ""}`)
+      }
+
+      // For ADRs: also show decision + consequences headings
+      if (etype === "decision") {
+        if (typeof doc.decision === "string" && doc.decision.length > 0) {
+          lines.push("")
+          lines.push("Decision excerpt:")
+          lines.push(`  ${doc.decision.replace(/\n+/g, " ").slice(0, 300)}${doc.decision.length > 300 ? "..." : ""}`)
+        }
+        if (doc.supersedes) lines.push(`Supersedes: ${doc.supersedes}`)
+      }
+
+    // ------------------------------------------------------------------
+    // Shape C: Generic single entity (session, task, ingest_item, etc.)
+    // Fields directly on the object: id, title, status, priority, body…
+    // ------------------------------------------------------------------
+    } else if (obj.id || obj.entity_id) {
+      if (obj.entity_type) lines.push(`Entity type: ${obj.entity_type}`)
+      if (obj.id) lines.push(`id: ${obj.id}`)
+      if (obj.title) lines.push(`Title:  ${obj.title}`)
+      if (obj.status) lines.push(`Status: ${obj.status}`)
+      if (obj.priority) lines.push(`Priority: ${obj.priority}`)
+      if (obj.project_id) lines.push(`Project: ${obj.project_id}`)
+      if (obj.created_at) lines.push(`Created: ${String(obj.created_at).slice(0, 10)}`)
+
+      const bodyField = (obj.body ?? obj.description ?? obj.summary ?? obj.context) as string | undefined
+      if (typeof bodyField === "string" && bodyField.length > 0) {
+        lines.push("")
+        lines.push("Excerpt:")
+        const excerpt = bodyField.replace(/\n+/g, " ").slice(0, 400)
+        lines.push(`  ${excerpt}${bodyField.length > 400 ? "..." : ""}`)
+      }
+
+    // ------------------------------------------------------------------
+    // Shape D: Unknown JSON structure — show top-level keys + scalar values
+    // ------------------------------------------------------------------
+    } else {
+      const keys = Object.keys(obj)
+      lines.push(`JSON response with ${keys.length} fields: ${keys.slice(0, 15).join(", ")}`)
+      lines.push("")
+      for (const [key, val] of Object.entries(obj)) {
+        if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
+          lines.push(`  ${key}: ${val}`)
         }
       }
     }
   } else {
-    // Non-JSON: extract first lines and last lines
+    // Non-JSON: show first 20 lines
     const textLines = raw.split("\n")
     lines.push(`Text response (${textLines.length} lines)`)
     lines.push("")
-    lines.push("First 20 lines:")
-    for (const l of textLines.slice(0, 20)) {
-      lines.push(l)
-    }
-    if (textLines.length > 20) {
-      lines.push(`... ${textLines.length - 20} lines omitted`)
-    }
+    for (const l of textLines.slice(0, 20)) lines.push(l)
+    if (textLines.length > 20) lines.push(`... ${textLines.length - 20} lines omitted`)
   }
 
   lines.push("")
@@ -605,7 +679,8 @@ function getNexusConfig(directory: string): NexusConfig | null {
     }
     if (!resolvedToken && existsSync(credsPath)) {
       const raw = readFileSync(credsPath, "utf-8")
-      const match = raw.match(/private_token\s*=\s*"([^"]+)"/)
+      // credentials.toml uses `token = "..."` (not `private_token`)
+      const match = raw.match(/^\s*token\s*=\s*"([^"]+)"/m)
       if (match) resolvedToken = match[1]
     }
 
@@ -684,10 +759,15 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
       projectContext = await fetchProjectContext(nexusConfig, projectId)
       if (projectContext && !projectContext.headroomEnabled) {
         // Headroom not enabled in project backend — disable transform, observe only
-        client.app.log(
-          `[${PLUGIN_META.name}] v${PLUGIN_META.version} — headroom not enabled ` +
-          `for project ${projectId}, running in observe-only mode`
-        )
+        await client.app.log({
+          body: {
+            service: PLUGIN_META.name,
+            level: "warn",
+            message:
+              `v${PLUGIN_META.version} — headroom not enabled ` +
+              `for project ${projectId}, running in observe-only mode`,
+          },
+        })
         fileLog(
           directory,
           `Project gate: headroom not in project plugins ` +
@@ -718,12 +798,17 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
   }
 
   // Startup logging
-  client.app.log(
-    `[${PLUGIN_META.name}] v${PLUGIN_META.version} loaded — mode=${mode}, ` +
-    `project=${projectId ?? "unknown"}, ` +
-    `policies=${Object.keys(POLICIES).length}, ` +
-    `minTokens=${DEFAULT_MIN_TOKENS}`
-  )
+  await client.app.log({
+    body: {
+      service: PLUGIN_META.name,
+      level: "info",
+      message:
+        `v${PLUGIN_META.version} loaded — mode=${mode}, ` +
+        `project=${projectId ?? "unknown"}, ` +
+        `policies=${Object.keys(POLICIES).length}, ` +
+        `minTokens=${DEFAULT_MIN_TOKENS}`,
+    },
+  })
   fileLog(directory, `Plugin loaded: mode=${mode}, version=${PLUGIN_META.version}, project=${projectId ?? "unknown"}`)
 
   return {
@@ -731,6 +816,7 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
     // tool.execute.after — the core interception hook
     // -----------------------------------------------------------------------
     "tool.execute.after": async (input, output) => {
+      const out = output as unknown as ToolOutput
       const toolName = String(input?.tool ?? "")
       if (!toolName) return
 
@@ -758,7 +844,13 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
       }
 
       // Compress policy — check threshold
-      const outputStr = String(output?.output ?? "")
+      // MCP tools return results in output.content[].text, native tools in output.output
+      const rawOutput = out.output ?? ""
+      const rawContent = Array.isArray(out.content)
+        ? out.content.map((c) => c?.text ?? "").join("\n")
+        : ""
+      const outputStr = String(rawOutput || rawContent)
+      const isMcpContent = !rawOutput && !!rawContent
       if (!outputStr) return
 
       const estimatedTokens = estimateTokens(outputStr)
@@ -801,12 +893,20 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
       if (mode === "transform") {
         // Mutate the output — this is the critical operation
         try {
-          output.output = compact
+          if (!isMcpContent) {
+            // Native tool: mutate output.output directly
+            out.output = compact
+          } else if (Array.isArray(out.content) && out.content.length > 0) {
+            // MCP tool: mutate first content item's text field
+            out.content[0].text = compact
+          } else {
+            out.output = compact
+          }
           metrics.totalCompressions++
           fileLog(
             directory,
             `TRANSFORM ${toolName}: ${estimatedTokens} -> ${compressedTokens} tokens ` +
-            `(saved ${savedTokens}, ratio ${event.compressionRatio.toFixed(2)}, hash=${hash})`
+            `(saved ${savedTokens}, ratio ${event.compressionRatio.toFixed(2)}, hash=${hash}, mcp=${isMcpContent})`
           )
         } catch (err) {
           // Fail-open: if mutation fails, leave original intact
@@ -819,16 +919,22 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
         fileLog(
           directory,
           `OBSERVE ${toolName}: ${estimatedTokens} tokens, ` +
-          `would save ${savedTokens} (ratio ${event.compressionRatio.toFixed(2)}, hash=${hash})`
+          `would save ${savedTokens} (ratio ${event.compressionRatio.toFixed(2)}, hash=${hash}, mcp=${isMcpContent})`
         )
       }
     },
 
     // -----------------------------------------------------------------------
-    // Event handler — periodic metrics logging
+    // Event handler — periodic metrics logging on session idle
     // -----------------------------------------------------------------------
     event: async ({ event }) => {
-      if ((event as any).type === "session.idle" && metrics.events.length > 0) {
+      const ev = event as any
+      const isIdle =
+        ev.type === "session.idle" ||
+        ev.name === "session.idle" ||
+        ev.kind === "session.idle"
+
+      if (isIdle && metrics.events.length > 0) {
         const summary = [
           `Headroom intercept session summary (mode=${mode}):`,
           `  Compressions: ${metrics.totalCompressions}`,
