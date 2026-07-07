@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     full EVENT dumps) that generated 100 KB+ log files per session; kept only
     TRANSFORM/OBSERVE/FAIL entries and the session-idle summary
 
+## [1.2.1] - 2026-07-07
+
+### Changed
+- **`nexus-headroom-intercept` v0.2.0** — project-context gate via Nexus preflight API
+  - Plugin now reads `project_id` from `.nexus/AGENTS.md` YAML frontmatter
+  - Queries `/api/projects/{id}/preflight` to check if `headroom` is in the
+    project's plugin list before activating transform mode
+  - If `headroom` is not enabled for the project: forces observe-only mode
+  - Falls back to configured mode when preflight API is unreachable or credentials
+    are unavailable — no silent failures
+
 ## [1.2.0] - 2026-07-07
 
 ### Added
