@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-07
+
+### Changed
+- **`nexus-headroom-intercept` v0.4.0** — production hardening based on code-level architecture assessment
+  - **Safe default mode:** `DEFAULT_MODE` changed from `"transform"` to `"observe"`. Transform mode requires explicit `HEADROOM_MODE=transform` after provider-level verification.
+  - **Full MCP result shape support:** new `normalizeToolResult()` handles both `output.output` (native tools) and raw `content[]` (MCP `CallToolResult`). Non-text content parts (image, resource) are preserved unchanged.
+  - **Retrieval bridge:** plugin-owned `nexus_headroom_intercept_retrieve` tool registered. Compact outputs now point to this tool instead of the external Headroom MCP server, closing the CCR gap. Supports optional query filtering.
+  - **Negative-savings guard:** transform skipped when `compressedTokens >= estimatedTokens` or saving ratio < 15% (`MINIMUM_SAVING_RATIO = 0.15`).
+  - **OpenCode SDK version guard:** reads `@opencode-ai/plugin` version from `.opencode/package.json` at startup; downgrades to `observe` if below `>=1.14` or unresolvable.
+  - **Disk cache hardening:** TTL eviction (24h), quota (100 MB / 200 entries), restrictive permissions (`0600` files, `0700` directory), `.gitignore` enforcement for `headroom-cache/` and log files.
+  - **Structured JSONL logging:** replaces plain-text log with `headroom-intercept.jsonl`; log rotation (10 MB / 3 retained files), `0600` permissions.
+  - **Metric clarity:** `totalSavedTokens` → `potentialSavedTokens`; `confirmedTransforms`, `totalNoGain`, `totalUnsupportedShapes` added.
+  - **Full SHA-256 hashes:** `contentHash()` no longer truncates; full 64-char hex digest.
+  - **Relevance sorting:** task lists sorted blocked-first + priority desc; dispatch lists sorted blocking + priority desc; search results sorted by score desc.
+  - **Policy additions:** `nexus_doc_update`, `nexus_dispatch_ack` as write-operation passthroughs; `nexus_headroom_intercept_retrieve` registered as passthrough.
+
 ## [1.3.0] - 2026-07-07
 
 ### Changed
