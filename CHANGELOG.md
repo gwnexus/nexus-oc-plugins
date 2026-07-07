@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-07
+
+### Added
+- **`nexus-headroom-intercept` v0.1.0** (`300-headroom-intercept/`) — pre-injection
+  context compression for Nexus MCP tool outputs
+  - Uses `tool.execute.after` hook to intercept large MCP tool responses before
+    they enter the agent context window
+  - Policy-based deterministic compression (no LLM summarization)
+  - Three compression profiles: reference-data, structured-list, search-results
+  - In-memory + disk cache for original content storage and retrieval
+  - Observe and transform modes with fail-open behavior
+  - File-based activity log at `.nexus/headroom-intercept.log`
+  - Ref: ADR-0060
+
+### Changed
+- Root README updated to include `nexus-headroom-intercept` in the plugin table
+
 ## [1.1.0] - 2026-05-30
 
 ### Added

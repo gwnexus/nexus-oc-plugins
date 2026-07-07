@@ -10,6 +10,7 @@ These plugins extend OpenCode with Nexus platform integration — session tracki
 | --- | --- | --- | --- |
 | **Compaction Plus** | [`100-compaction-plus`](./100-compaction-plus) | v1.8.0 | Preserves Nexus session context across OpenCode compaction events |
 | **Cost Control** | [`200-cost-control`](./200-cost-control) | v1.0.0 | Token usage and cost tracking via Helicone; records per-session cost summaries in the Nexus timeline |
+| **Headroom Intercept** | [`300-headroom-intercept`](./300-headroom-intercept) | v0.1.0 | Pre-injection context compression for Nexus MCP tool outputs via `tool.execute.after` hook |
 
 ## Installation
 
