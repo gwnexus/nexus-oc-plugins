@@ -16,19 +16,15 @@ import { createHash } from "node:crypto"
 /**
  * Plugin metadata — single source of truth for name/version.
  *
- * Version: 0.5.0
- * Changes from 0.4.0:
- *   - Fix: isError responses pass through without compression (never summarize error payloads)
- *   - Fix: store.set() moved after no-gain guard — originals only stored when transform will occur
- *   - Fix: observe mode skips disk persistence by default (metrics only)
- *   - Fix: OriginalStore.get() enforces TTL — expired entries deleted on access
- *   - Fix: evictDisk() sorts newest-first to keep newest CACHE_MAX_ENTRIES entries
- *   - Fix: bounded retrieval — max_lines/max_chars defaults, no full dump on zero match
- *   - Fix: confirmedTransforms renamed to locallyAppliedTransforms
+ * Version: 0.5.1
+ * Changes from 0.5.0:
+ *   - Fix 6.4a: max_lines/max_chars clamped to server-controlled hard limits (1-1000 / 1-100000)
+ *   - Fix 6.4b: all retrieval responses include returned_lines and returned_chars metadata
+ *   - Fix 6.5: hash input validated as 64-char hex before any file-system access
  */
 const PLUGIN_META = {
   name: "nexus-headroom-intercept",
-  version: "0.5.0",
+  version: "0.5.1",
   description:
     "Pre-injection context compression for Nexus MCP tool outputs. " +
     "Uses the tool.execute.after hook to apply policy-based deterministic " +
@@ -979,6 +975,17 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
           max_chars?: number
           allow_full?: boolean
         }) => {
+          // Fix 6.5: validate hash format — must be exactly 64 hex chars (full SHA-256)
+          // Guards against path traversal, malformed input, and accidental misuse.
+          if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) {
+            return {
+              found: false,
+              hash: hash ?? "",
+              error: "invalid_hash",
+              message: "Hash must be a 64-character lowercase hexadecimal string (full SHA-256).",
+            }
+          }
+
           const content = store.get(hash)
           if (!content) {
             return {
@@ -990,45 +997,77 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
             }
           }
 
-          const effectiveMaxLines = max_lines ?? 100
-          const effectiveMaxChars = max_chars ?? 12000
+          // Fix 6.4a: clamp user-supplied bounds to server-controlled hard limits
+          const MAX_LINES_HARD = 1000
+          const MAX_CHARS_HARD = 100_000
+          const effectiveMaxLines = Math.min(Math.max(1, Math.floor(max_lines ?? 100)), MAX_LINES_HARD)
+          const effectiveMaxChars = Math.min(Math.max(1, Math.floor(max_chars ?? 12_000)), MAX_CHARS_HARD)
 
           if (query && query.trim()) {
             const qLower = query.toLowerCase()
             const lines = content.split("\n")
             const matched = lines.filter(l => l.toLowerCase().includes(qLower))
+
             if (matched.length === 0) {
               return {
                 found: true,
                 hash,
                 query,
                 matched_lines: 0,
+                returned_lines: 0,
+                returned_chars: 0,
                 content: null,
                 message: "No lines matched the query. Refine the query or omit it to retrieve a bounded excerpt.",
               }
             }
-            const bounded = matched.slice(0, effectiveMaxLines).join("\n").slice(0, effectiveMaxChars)
-            return { found: true, hash, query, matched_lines: matched.length, content: bounded }
-          }
 
-          // No query — return bounded excerpt unless allow_full=true
-          if (!allow_full) {
-            const lines = content.split("\n")
-            const excerpt = lines.slice(0, effectiveMaxLines).join("\n").slice(0, effectiveMaxChars)
-            const truncated = excerpt.length < content.length
+            // Fix 6.4b: bounded slice + explicit returned_lines / returned_chars metadata
+            const bounded = matched.slice(0, effectiveMaxLines).join("\n").slice(0, effectiveMaxChars)
             return {
               found: true,
               hash,
-              content: excerpt,
-              truncated,
+              query,
+              matched_lines: matched.length,
+              returned_lines: Math.min(matched.length, effectiveMaxLines),
+              returned_chars: bounded.length,
+              truncated: matched.length > effectiveMaxLines || bounded.length < matched.slice(0, effectiveMaxLines).join("\n").length,
+              content: bounded,
+            }
+          }
+
+          // No query — bounded excerpt unless allow_full=true
+          if (!allow_full) {
+            const lines = content.split("\n")
+            const sliced = lines.slice(0, effectiveMaxLines).join("\n")
+            const excerpt = sliced.slice(0, effectiveMaxChars)
+            const truncated = lines.length > effectiveMaxLines || excerpt.length < sliced.length
+            return {
+              found: true,
+              hash,
+              returned_lines: excerpt.split("\n").length,
+              returned_chars: excerpt.length,
+              total_lines: lines.length,
               total_chars: content.length,
+              truncated,
+              content: excerpt,
               message: truncated
                 ? `Showing first ${effectiveMaxLines} lines / ${effectiveMaxChars} chars. Pass allow_full=true for the complete original.`
                 : undefined,
             }
           }
 
-          return { found: true, hash, content }
+          // allow_full=true — return complete original with metadata
+          const lines = content.split("\n")
+          return {
+            found: true,
+            hash,
+            returned_lines: lines.length,
+            returned_chars: content.length,
+            total_lines: lines.length,
+            total_chars: content.length,
+            truncated: false,
+            content,
+          }
         },
       },
     ],

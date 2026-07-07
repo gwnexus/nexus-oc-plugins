@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-07-07
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.1** — retrieval input hardening (v0.5.0 public verification follow-ups)
+  - **Retrieval input clamping:** `max_lines` and `max_chars` clamped to server-controlled hard limits (`MAX_LINES_HARD=1000`, `MAX_CHARS_HARD=100000`); non-integer, negative, and excessively large values are normalized via `Math.min(Math.max(1, Math.floor(...)), hard_limit)`
+  - **Retrieval response metadata:** all return paths now include `returned_lines` and `returned_chars`; `total_lines` added alongside existing `total_chars`; `truncated` flag made consistent across all paths
+  - **Hash-format validation:** `nexus_headroom_intercept_retrieve` validates the `hash` parameter as a 64-character lowercase hex string before any file-system access; invalid input returns `{ found: false, error: "invalid_hash" }` without touching the cache directory
+
 ## [1.5.0] - 2026-07-07
 
 ### Changed
