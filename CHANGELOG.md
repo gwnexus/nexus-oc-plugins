@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.7] - 2026-07-08
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.7** — final pre-integration hardening (doc 27 findings)
+  - **§2 Central delimiter escaping:** `escapeHeadroomControlDelimiters()` extracted as a single shared function; used by both `applyOutputBudget` (compressed body) and `wrapRetrievedContent` (retrieved originals). Retrieved content now escapes control markers before wrapping.
+  - **§3 Trusted header validation:** `compressByProfile()` validates `lines[0].startsWith("[HEADROOM:v1] ")` before treating it as the trusted header. Fallback: `buildHeadroomHeader()` synthesizes a valid header so no data line can accidentally be promoted outside the untrusted block.
+  - **§4a Debug opt-in:** `DEBUG` changed from `!== "false"` to `=== "true"`. Default is now off. HEADROOM_DEBUG must be explicitly set to enable trace events.
+  - **§4b Query privacy:** `retrieve_lookup` debug event no longer logs raw query text; replaced with `query_present`, `query_length` structural metadata.
+  - **§5 parseBoundedPositiveInt():** New helper validates env-var retrieval limits against zero, negative, non-finite, and malformed values. `RETRIEVAL_MAX_LINES_HARD` / `RETRIEVAL_MAX_CHARS_HARD` now use this function instead of bare `parseInt(...) || default`.
+  - **§7 No-op filter removed:** `].filter(l => l !== "" || true).join(...)` in `applyOutputBudget` output assembly replaced with direct `.join("\n")`.
+  - **§8 totalCacheReadFailures counter:** `SessionMetrics` gains `totalCacheReadFailures`; `store.onCacheReadFailed` increments it; included in `session_summary` and `hasActivity` check.
+
 ## [1.5.6] - 2026-07-08
 
 ### Changed
