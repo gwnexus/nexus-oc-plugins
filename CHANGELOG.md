@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-07-08
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.3** — cache lifecycle, SDK guard, and preflight hardening (v0.5.2 assessment findings)
+  - **Byte-quota eviction (P1):** `evictDisk()` rewritten as three-phase: (1) delete expired entries, (2) sort newest-first + trim to `CACHE_MAX_ENTRIES`, (3) trim from the *oldest* end until byte quota satisfied. Previous implementation checked `overBytes` at `idx=0` (newest entry) and deleted newest entries first — contradicting the stated "keep newest" policy.
+  - **In-memory TTL (P1):** `OriginalStore` cache changed from `Map<string, string>` to `Map<string, {content, storedAt}>`. TTL is now checked against the stored timestamp, independent of disk-file existence. Previous implementation called `isDiskEntryExpired()` which returned `false` when the disk file was missing, making in-memory entries effectively immortal.
+  - **SDK major cap (P1):** Compatibility check changed from `major > 1 || ...` to `major === REQUIRED_SDK_MAJOR && minor >= REQUIRED_SDK_MINOR`. Future major versions (2.x, 3.x) are rejected as untested — they must be explicitly re-validated before being added to the accepted range.
+  - **Strict preflight gate (P1):** `HEADROOM_REQUIRE_PREFLIGHT=true` env flag introduced. When set, missing project ID, missing credentials, or unreachable preflight all downgrade transform to observe. Default `false` preserves existing dev-friendly behavior.
+  - **Unknown namespace downgrade (P2):** When no project ID is found in `AGENTS.md`, transform mode is downgraded to observe. The `unknown` namespace weakens cache isolation guarantees; transform requires explicit project identity.
+  - **Unique tmp filenames (P2):** Atomic write now uses `<hash>.<pid>.<random>.tmp` instead of the deterministic `<hash>.json.tmp`. Eliminates the race window when two processes write the same hash concurrently.
+  - **NaN/Infinity guard (P2):** Retrieval bound clamping uses `Number.isFinite()` before `Math.floor()`. `Math.floor(NaN)` returns `NaN` which propagates through `Math.min/Math.max`; now defaults to 100/12000 for non-finite inputs.
+  - **In-memory prune order:** `prune()` now removes oldest entries by `storedAt` timestamp instead of insertion-order FIFO.
+
 ## [1.5.2] - 2026-07-07
 
 ### Changed

@@ -17,16 +17,19 @@ import { createHash } from "node:crypto"
 /**
  * Plugin metadata — single source of truth for name/version.
  *
- * Version: 0.5.2
- * Changes from 0.5.1:
- *   - Fix 6.3: checkSdkVersion reads installed version from node_modules, not declared range
- *   - Fix 6.5a: atomic cache writes via tmp-file + renameSync (no corrupt entries on crash)
- *   - Fix 6.5b: project-scoped cache path — headroom-cache/<projectId>/<hash>.json
- *   - Fix 6.6: multipart content ordering documented as known limitation (comment)
+ * Version: 0.5.3
+ * Changes from 0.5.2:
+ *   - Fix P1: evictDisk() three-phase: expire → count-trim → byte-trim from oldest end
+ *   - Fix P1: in-memory cache stores {content, storedAt} — TTL independent of disk
+ *   - Fix P1: SDK guard caps at REQUIRED_SDK_MAJOR (untested major versions → observe)
+ *   - Fix P1: HEADROOM_REQUIRE_PREFLIGHT=true env flag for strict production preflight gate
+ *   - Fix P2: unique tmp path per write (hash.pid.random.tmp) — no concurrent-write races
+ *   - Fix P2: NaN/Infinity guard in retrieval bounds (Number.isFinite before clamping)
+ *   - Fix P2: unknown project namespace → downgrade transform to observe
  */
 const PLUGIN_META = {
   name: "nexus-headroom-intercept",
-  version: "0.5.2",
+  version: "0.5.3",
   description:
     "Pre-injection context compression for Nexus MCP tool outputs. " +
     "Uses the tool.execute.after hook to apply policy-based deterministic " +
@@ -34,6 +37,8 @@ const PLUGIN_META = {
 } as const
 
 // Minimum SDK version required for reliable tool.execute.after MCP output mutation.
+// Maximum accepted major: REQUIRED_SDK_MAJOR — future major versions may break the hook
+// contract and must be explicitly re-tested before being added to this range.
 const REQUIRED_SDK_MAJOR = 1
 const REQUIRED_SDK_MINOR = 14
 
@@ -114,10 +119,16 @@ interface SessionMetrics {
  * - "transform": apply compression and mutate output — requires verified OpenCode version
  *
  * Enable transform mode explicitly: HEADROOM_MODE=transform
+ *
+ * Strict preflight gate (production):
+ * Set HEADROOM_REQUIRE_PREFLIGHT=true to force observe mode when project ID is
+ * unavailable, credentials are missing, or the preflight endpoint is unreachable.
+ * Default: false (dev-friendly — warnings only).
  */
 type PluginMode = "observe" | "transform"
 
 const DEFAULT_MODE: PluginMode = "observe"
+const REQUIRE_PREFLIGHT = process.env.HEADROOM_REQUIRE_PREFLIGHT === "true"
 const DEFAULT_MIN_TOKENS = 2000
 const CHARS_PER_TOKEN = 4
 const MINIMUM_SAVING_RATIO = 0.15  // Skip transform if saving < 15%
@@ -319,7 +330,8 @@ class StructuredLogger {
 // ---------------------------------------------------------------------------
 
 class OriginalStore {
-  private cache = new Map<string, string>()
+  // Fix P1: store {content, storedAt} so TTL is independent of disk-file existence
+  private cache = new Map<string, { content: string; storedAt: number }>()
   private cacheDir: string
   private projectDir: string
 
@@ -360,12 +372,14 @@ class OriginalStore {
   }
 
   set(hash: string, content: string): void {
-    this.cache.set(hash, content)
-    // Fix 6.5a: atomic write — write to a .tmp file first, then rename.
-    // Prevents partial/corrupt cache entries if the process is interrupted mid-write.
+    this.cache.set(hash, { content, storedAt: Date.now() })
+    // Fix P2: unique tmp path avoids race when two processes write the same hash concurrently.
+    // Content is identical for a given hash, so semantic corruption is impossible,
+    // but a deterministic .tmp name would cause noisy chmod/rename failures under concurrency.
     try {
       const filePath = join(this.cacheDir, `${hash}.json`)
-      const tmpPath  = join(this.cacheDir, `${hash}.json.tmp`)
+      const unique = `${hash}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+      const tmpPath  = join(this.cacheDir, unique)
       writeFileSync(tmpPath, JSON.stringify({
         hash,
         length: content.length,
@@ -376,22 +390,31 @@ class OriginalStore {
       chmodSync(tmpPath, 0o600)
       renameSync(tmpPath, filePath)
     } catch {
-      // Cleanup stale tmp file if rename failed
-      try { unlinkSync(join(this.cacheDir, `${hash}.json.tmp`)) } catch {}
+      // Cleanup stale unique tmp file if rename failed
+      try {
+        const unique = `${hash}.${process.pid}`
+        const dir = join(this.cacheDir)
+        // best-effort: find and remove any matching .tmp for this hash+pid
+        try {
+          for (const f of readdirSync(dir).filter(f => f.startsWith(`${hash}.${process.pid}`) && f.endsWith('.tmp'))) {
+            try { unlinkSync(join(dir, f)) } catch {}
+          }
+        } catch {}
+        void unique // suppress lint
+      } catch {}
     }
   }
 
   get(hash: string): string | null {
-    // Check in-memory first, but still validate TTL
+    // Check in-memory first — TTL is independent of disk state (Fix P1)
     const cached = this.cache.get(hash)
     if (cached !== undefined) {
-      const expired = this.isDiskEntryExpired(hash)
-      if (expired) {
+      if ((Date.now() - cached.storedAt) > CACHE_TTL_MS) {
         this.cache.delete(hash)
         this.deleteDiskEntry(hash)
         return null
       }
-      return cached
+      return cached.content
     }
     // Disk fallback with TTL check
     try {
@@ -405,7 +428,7 @@ class OriginalStore {
       const raw = readFileSync(filePath, "utf-8")
       const data = JSON.parse(raw)
       if (data?.content) {
-        this.cache.set(hash, data.content)
+        this.cache.set(hash, { content: data.content, storedAt: Date.now() })
         return data.content
       }
     } catch {}
@@ -428,15 +451,27 @@ class OriginalStore {
   prune(maxEntries = 50): void {
     if (this.cache.size <= maxEntries) return
     const keys = Array.from(this.cache.keys())
-    for (const key of keys.slice(0, keys.length - maxEntries)) {
+    // Remove oldest entries (lowest storedAt) first
+    const sorted = keys.sort((a, b) => {
+      const ta = this.cache.get(a)?.storedAt ?? 0
+      const tb = this.cache.get(b)?.storedAt ?? 0
+      return ta - tb
+    })
+    for (const key of sorted.slice(0, keys.length - maxEntries)) {
       this.cache.delete(key)
     }
   }
 
-  /** Evict disk entries older than TTL or exceeding quota. Keeps newest entries. */
+  /** Evict disk entries — three-phase: expire → count-trim → byte-trim from oldest end.
+   *
+   * Fix P1: previous implementation checked overBytes at idx=0 (newest), which deleted
+   * the most recently stored entries first — contradicting the "keep newest" policy.
+   * Correct approach: after expiry and count trim, remove from the *oldest* end until
+   * the byte quota is satisfied.
+   */
   evictDisk(): void {
     try {
-      // Also clean up any stale .tmp files from interrupted writes
+      // Phase 0: clean up stale .tmp files from interrupted writes
       const allFiles = readdirSync(this.cacheDir)
       for (const f of allFiles.filter(f => f.endsWith(".tmp"))) {
         try { unlinkSync(join(this.cacheDir, f)) } catch {}
@@ -444,34 +479,47 @@ class OriginalStore {
 
       const files = allFiles.filter(f => f.endsWith(".json"))
       const now = Date.now()
-      let totalBytes = 0
       const entries: { file: string; mtime: number; size: number }[] = []
 
       for (const f of files) {
         try {
           const fp = join(this.cacheDir, f)
           const st = statSync(fp)
-          totalBytes += st.size
           entries.push({ file: fp, mtime: st.mtimeMs, size: st.size })
         } catch {}
       }
 
-      // Sort newest-first — we want to keep the newest CACHE_MAX_ENTRIES
-      entries.sort((a, b) => b.mtime - a.mtime)
+      // Phase 1: delete expired entries
+      const alive = entries.filter(entry => {
+        if ((now - entry.mtime) > CACHE_TTL_MS) {
+          try { unlinkSync(entry.file) } catch {}
+          return false
+        }
+        return true
+      })
 
-      entries.forEach((entry, idx) => {
-        const expired = (now - entry.mtime) > CACHE_TTL_MS
-        // After keeping the first CACHE_MAX_ENTRIES newest entries,
-        // delete the rest; also delete if quota is exceeded.
-        const overCount = idx >= CACHE_MAX_ENTRIES
-        const overBytes = totalBytes > CACHE_MAX_BYTES
-        if (expired || overCount || overBytes) {
+      // Phase 2: sort newest-first, trim to CACHE_MAX_ENTRIES
+      alive.sort((a, b) => b.mtime - a.mtime)
+      const afterCount = alive.filter((entry, idx) => {
+        if (idx >= CACHE_MAX_ENTRIES) {
+          try { unlinkSync(entry.file) } catch {}
+          return false
+        }
+        return true
+      })
+
+      // Phase 3: byte-quota trim — remove from the *oldest* end (reversed)
+      // This preserves the newest entries while reducing total size.
+      let totalBytes = afterCount.reduce((sum, e) => sum + e.size, 0)
+      if (totalBytes > CACHE_MAX_BYTES) {
+        for (const entry of [...afterCount].reverse()) {
+          if (totalBytes <= CACHE_MAX_BYTES) break
           try {
             unlinkSync(entry.file)
             totalBytes -= entry.size
           } catch {}
         }
-      })
+      }
     } catch {}
   }
 }
@@ -906,8 +954,9 @@ function checkSdkVersion(ctx: any, logger: StructuredLogger): boolean {
     const major = parseInt(match[1], 10)
     const minor = parseInt(match[2], 10)
     const compatible =
-      major > REQUIRED_SDK_MAJOR ||
-      (major === REQUIRED_SDK_MAJOR && minor >= REQUIRED_SDK_MINOR)
+      major === REQUIRED_SDK_MAJOR && minor >= REQUIRED_SDK_MINOR
+    // Fix P1: major > REQUIRED_SDK_MAJOR is NOT accepted — untested majors may
+    // break the hook contract. Treat as incompatible until explicitly re-tested.
 
     if (!compatible) {
       logger.log("warn", "sdk_version_incompatible", {
@@ -960,13 +1009,34 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
       } else if (projectContext) {
         logger.log("info", "project_gate_ok", { projectId })
       } else {
-        logger.log("warn", "project_gate_preflight_unreachable", { projectId, mode })
+        // Preflight unreachable
+        if (REQUIRE_PREFLIGHT && mode === "transform") {
+          mode = "observe"
+          logger.log("warn", "project_gate_preflight_unreachable_strict", { projectId, mode, require_preflight: true })
+        } else {
+          logger.log("warn", "project_gate_preflight_unreachable", { projectId, mode })
+        }
       }
     } else {
-      logger.log("warn", "project_gate_no_credentials", { mode })
+      // No credentials
+      if (REQUIRE_PREFLIGHT && mode === "transform") {
+        mode = "observe"
+        logger.log("warn", "project_gate_no_credentials_strict", { mode, require_preflight: true })
+      } else {
+        logger.log("warn", "project_gate_no_credentials", { mode })
+      }
     }
   } else {
-    logger.log("warn", "project_gate_no_project_id", { mode })
+    // No project ID — Fix P2: downgrade transform (unknown namespace weakens isolation)
+    if (mode === "transform") {
+      mode = "observe"
+      logger.log("warn", "project_gate_no_project_id_transform_downgrade", {
+        mode,
+        reason: "unknown namespace — transform requires explicit project identity",
+      })
+    } else {
+      logger.log("warn", "project_gate_no_project_id", { mode })
+    }
   }
 
   const store = new OriginalStore(directory, projectId)
@@ -1055,11 +1125,14 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
             }
           }
 
-          // Fix 6.4a: clamp user-supplied bounds to server-controlled hard limits
+          // Fix P1: hard limits enforced server-side
+          // Fix P2: NaN/Infinity guard — clamp only if the value is a finite number
           const MAX_LINES_HARD = 1000
           const MAX_CHARS_HARD = 100_000
-          const effectiveMaxLines = Math.min(Math.max(1, Math.floor(max_lines ?? 100)), MAX_LINES_HARD)
-          const effectiveMaxChars = Math.min(Math.max(1, Math.floor(max_chars ?? 12_000)), MAX_CHARS_HARD)
+          const safeLines = Number.isFinite(max_lines) ? max_lines! : 100
+          const safeChars = Number.isFinite(max_chars) ? max_chars! : 12_000
+          const effectiveMaxLines = Math.min(Math.max(1, Math.floor(safeLines)), MAX_LINES_HARD)
+          const effectiveMaxChars = Math.min(Math.max(1, Math.floor(safeChars)), MAX_CHARS_HARD)
 
           if (query && query.trim()) {
             const qLower = query.toLowerCase()
