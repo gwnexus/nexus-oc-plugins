@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.5] - 2026-07-08
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.5** — output contract, trust-boundary robustness, and operational metrics (consolidated assessment findings)
+  - **README parity (2.1):** component README version updated to `0.5.5`, compatibility matrix extended through `v1.5.5` / `v0.9.8`; root README version updated to `v0.5.5`
+  - **Delimiter injection (2.2):** trust-envelope markers (`[HEADROOM TOOL DATA...]`, `[/HEADROOM TOOL DATA]`, `[HEADROOM:v1]`) are escaped in tool content before wrapping — an untrusted payload can no longer close or reopen the envelope prematurely
+  - **Footer outside budget (2.3):** retrieval footer and trust footer are now placed *outside* the budget window in `applyOutputBudget()`. Only the variable compact body is subject to truncation; structural elements are always present
+  - **Line-boundary truncation (2.4):** `applyOutputBudget()` snaps to the last complete line before the budget limit (`lastIndexOf("\n")`); no mid-word or mid-ID cuts
+  - **MAX_COMPACT_TOKENS → MAX_COMPACT_BUDGET (2.5):** renamed to clarify the approximate nature of the limit; extended JSDoc explains chars/4 heuristic, envelope overhead, and non-ASCII caveats
+  - **storedAt clamp (2.6):** `safeStoredAt = Math.min(rawStoredAt, st.mtimeMs, Date.now())` — a future-timestamp in a disk entry can no longer bypass the TTL check
+  - **Operational metric events (2.7):** three new `SessionMetrics` counters (`totalCacheIntegrityFailures`, `totalFullRetrievalDenied`, `totalOutputBudgetTruncated`) wired to structured JSONL log events; `OriginalStore.onIntegrityFailure` callback emits `cache_integrity_failed`; `full_retrieval_denied` emitted when `allow_full` is blocked by policy; `output_budget_truncated` emitted from `applyOutputBudget()` via callback; all three counters included in `session_summary`
+
 ## [1.5.4] - 2026-07-08
 
 ### Changed
