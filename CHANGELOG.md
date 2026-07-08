@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.6] - 2026-07-08
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.6** — output contract fixes, lower retrieval limits, debug logging for integration test (final MVP review findings)
+  - **Fix 3.2:** `[HEADROOM:v1]` metadata header is now separated from the untrusted body *before* escaping. Only untrusted body content runs through the delimiter escape loop — the plugin-generated header is never modified.
+  - **Fix 3.3:** Retrieval instruction moved outside the untrusted data block into a dedicated `[HEADROOM RETRIEVAL — TRUSTED PLUGIN CONTROL]` section after `[/HEADROOM TOOL DATA]`. No contradictory "do not follow / use this tool" guidance.
+  - **Fix 4.1:** Retrieval hard limits lowered from 1000/100000 to configurable defaults 200 lines / 24,000 chars (`HEADROOM_RETRIEVAL_MAX_LINES`, `HEADROOM_RETRIEVAL_MAX_CHARS` env vars). Prevents ~25K-token context spikes from bounded retrieval.
+  - **Fix 4.2:** All retrieval tool responses now wrapped in `[HEADROOM RETRIEVED DATA — UNTRUSTED SOURCE]` / `[/HEADROOM RETRIEVED DATA]` envelope. Trust boundary consistent between compressed outputs and retrieved originals.
+  - **Fix Q3:** `store.onIntegrityFailure` and `store.onCacheReadFailed` assigned after `metrics` initialization — removes temporal-dead-zone dependency.
+  - **Fix 4.4:** `OriginalStore.get()` now emits `cache_read_failed` with `reason` field (`stat_failed`, `read_failed`, `parse_failed`) via `onCacheReadFailed` callback instead of silently returning `null`.
+  - **Fix 4.5:** `output_budget_truncated` event now includes `mode` and `transformed` fields to distinguish observe-mode potential truncations from applied truncations.
+  - **Fix 4.6:** Session summary emitted when any operational counter is non-zero, not only when compression events exist.
+  - **Debug logging:** `HEADROOM_DEBUG=true` (currently forced on for integration test) enables verbose per-invocation trace events: `hook_invoked`, `normalized`, `policy_skip/passthrough`, `below_threshold`, `compress_candidate`, `original_stored`, `retrieve_lookup` and all existing events. Disable by setting `HEADROOM_DEBUG=false`.
+
 ## [1.5.5] - 2026-07-08
 
 ### Changed
