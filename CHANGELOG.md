@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.4] - 2026-07-08
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.4** — cache integrity, retrieval policy, and LLM safety hardening (v0.5.3 assessment findings)
+  - **Disk hydration TTL (P1):** Loading a disk entry into memory now preserves the original `storedAt` timestamp instead of setting `Date.now()`. A 23h59m-old file no longer gets a fresh 24h TTL window when accessed.
+  - **Content integrity (P1):** `OriginalStore.get()` now verifies `data.hash === hash` and `contentHash(data.content) === hash` before returning disk-loaded content. Corrupt, modified, or mismatched cache files are deleted and return `null`.
+  - **Full-retrieval policy gate (P1):** `allow_full=true` in `nexus_headroom_intercept_retrieve` is now silently ignored by default. Set `HEADROOM_ALLOW_FULL_RETRIEVAL=true` to permit agent-controlled full dumps. Prevents the LLM from bypassing context-size protection via the escape hatch in the compact footer.
+  - **Remove dead `isDiskEntryExpired()` (P2):** The helper was superseded by the in-memory `storedAt` check in v0.5.3 and was no longer called from `get()`. Removed to eliminate lifecycle ambiguity.
+  - **Structured-list sort comment (P2):** Comment previously claimed "recency desc" as a sort criterion. Removed the false claim — only blocking-first + priority desc is implemented.
+  - **Prompt-injection trust envelope (P2):** All compressed outputs are now wrapped in `[HEADROOM TOOL DATA — UNTRUSTED SOURCE]` / `[/HEADROOM TOOL DATA]` markers with an instruction-following warning. Strengthens the model-facing trust boundary for untrusted KB/dispatch data.
+  - **Hard output budget per profile (P2):** New `MAX_COMPACT_TOKENS` constant and `applyOutputBudget()` function. Each profile has a maximum compact output size: `reference-data` 2000 tokens, `structured-list` / `search-results` 1500 tokens. Outputs exceeding the budget are truncated deterministically before the trust envelope is applied.
+
 ## [1.5.3] - 2026-07-08
 
 ### Changed
