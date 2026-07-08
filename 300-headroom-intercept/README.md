@@ -5,7 +5,7 @@ Pre-injection context compression for Nexus MCP tool outputs.
 Uses the OpenCode `tool.execute.after` hook to apply policy-based deterministic
 compression before tool results enter the agent context window.
 
-**Current version:** `0.5.5`  
+**Current version:** `0.5.9`  
 **Default mode:** `observe` (safe — metrics only, no mutation)  
 **Transform mode:** experimental, requires explicit opt-in and provider-level verification
 
@@ -137,15 +137,19 @@ Activity is logged as structured JSONL to `.nexus/headroom-intercept.jsonl`
 
 ## Compatibility Matrix
 
-| Nexus Core | Plugin version | OpenCode SDK | Default mode |
-|------------|----------------|--------------|--------------|
-| `v0.9.2`   | `0.4.0`        | `>=1.14`     | `observe`    |
-| `v0.9.3`   | `0.5.0`        | `>=1.14`     | `observe`    |
-| `v0.9.4`   | `0.5.1`        | `>=1.14`     | `observe`    |
-| `v0.9.5`   | `0.5.2`        | `>=1.14`     | `observe`    |
-| `v0.9.6`   | `0.5.3`        | `>=1.14`     | `observe`    |
-| `v0.9.7`   | `0.5.4`        | `>=1.14`     | `observe`    |
-| `v0.9.8`   | `0.5.5`        | `>=1.14`     | `observe`    |
+| Nexus Core | Plugin version | OpenCode SDK | Default mode | Notes |
+|------------|----------------|--------------|--------------|-------|
+| `v0.9.2`   | `0.4.0`        | `>=1.14`     | `observe`    | |
+| `v0.9.3`   | `0.5.0`        | `>=1.14`     | `observe`    | |
+| `v0.9.4`   | `0.5.1`        | `>=1.14`     | `observe`    | |
+| `v0.9.5`   | `0.5.2`        | `>=1.14`     | `observe`    | |
+| `v0.9.6`   | `0.5.3`        | `>=1.14`     | `observe`    | |
+| `v0.9.7`   | `0.5.4`        | `>=1.14`     | `observe`    | |
+| `v0.9.8`   | `0.5.5`        | `>=1.14`     | `observe`    | |
+| `v0.9.9`   | `0.5.6`        | `>=1.14`     | `observe`    | |
+| `v0.9.10`  | `0.5.7`        | `>=1.14`     | `observe`    | §2–§8 fixes |
+| `v0.9.11`  | `0.5.8`        | `>=1.14`     | `observe`    | Preflight URL fix (PAT auth) |
+| `v0.9.12`  | `0.5.9`        | `>=1.14`     | `observe`    | Complete policy map (37→55 entries, nexus-mcp v0.10.1) |
 
 ## Requirements
 

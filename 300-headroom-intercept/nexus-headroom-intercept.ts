@@ -17,6 +17,24 @@ import { createHash } from "node:crypto"
 /**
  * Plugin metadata — single source of truth for name/version.
  *
+ * Version: 0.5.9
+ * Changes from 0.5.8:
+ *   - Fix §10: Complete POLICIES map — all nexus-mcp v0.10.1 tools now have explicit
+ *     entries. Previously missing: nexus_task_delete, nexus_doc_delete, nexus_kb_related,
+ *     nexus_dc_add, nexus_dc_list, nexus_vl_* (legacy aliases), nexus_sk_* (skill tools),
+ *     nexus_pd_* (directive tools), nexus_rv_* (review tools), nexus_project_list,
+ *     nexus_dispatch_get, nexus_dispatch_assign, nexus_dispatch_forward,
+ *     nexus_dispatch_related. These tools were previously caught by the nexus_* prefix
+ *     passthrough fallback, but explicit policies are required for auditability and
+ *     to prevent accidental compress classification of future tools with similar names.
+ *   - Policy count: 37 → 55
+ *
+ * Version: 0.5.8
+ * Changes from 0.5.7:
+ *   - Fix §9: preflight URL changed from /api/projects/{id}/preflight
+ *     to /api/mcp/projects/{id}/preflight — PAT-Auth now goes through
+ *     the MCP route (authenticateMcpRequest), fixing 401 for PAT tokens
+ *
  * Version: 0.5.7
  * Changes from 0.5.6:
  *   - Fix §2: central escapeHeadroomControlDelimiters() — applied to both compressed
@@ -31,7 +49,7 @@ import { createHash } from "node:crypto"
  */
 const PLUGIN_META = {
   name: "nexus-headroom-intercept",
-  version: "0.5.7",
+  version: "0.5.9",
   description:
     "Pre-injection context compression for Nexus MCP tool outputs. " +
     "Uses the tool.execute.after hook to apply policy-based deterministic " +
@@ -200,57 +218,112 @@ const LOG_MAX_BYTES = 10 * 1024 * 1024      // 10 MB per log file
 const LOG_RETAINED_FILES = 3
 
 const POLICIES: Record<string, Policy> = {
-  // Nexus knowledge tools — high volume, mostly reference data
-  nexus_kb_memory: { action: "compress", profile: "reference-data", minTokens: 2000 },
-  nexus_kb_search: { action: "compress", profile: "search-results", minTokens: 800 },
-  nexus_kb_get: { action: "compress", profile: "reference-data", minTokens: 3000 },
+  // ── Layer 1: Knowledge Access ─────────────────────────────────────────────
+  // High-volume, large-payload tools — compress when above threshold
+  nexus_kb_memory:  { action: "compress", profile: "reference-data",  minTokens: 2000 },
+  nexus_kb_search:  { action: "compress", profile: "search-results",  minTokens: 800 },
+  nexus_kb_get:     { action: "compress", profile: "reference-data",  minTokens: 3000 },
+  // kb_related returns a small graph neighbourhood — compress only when unusually large
+  nexus_kb_related: { action: "compress", profile: "structured-list", minTokens: 3000 },
+  // project_list: read-only, typically small; compress only when tenant has many projects
+  nexus_project_list: { action: "compress", profile: "structured-list", minTokens: 2000 },
 
-  // Nexus coordination tools — structured list responses
-  nexus_dispatch_sweep: { action: "compress", profile: "structured-list", minTokens: 500 },
-  nexus_dispatch_inbox: { action: "compress", profile: "structured-list", minTokens: 2000 },
-  nexus_dispatch_outbox: { action: "compress", profile: "structured-list", minTokens: 2000 },
-  nexus_doc_list: { action: "compress", profile: "structured-list", minTokens: 2000 },
-  nexus_task_list: { action: "compress", profile: "structured-list", minTokens: 2000 },
+  // ── Layer 2: Coordination — list/read tools ───────────────────────────────
+  nexus_dispatch_sweep:   { action: "compress", profile: "structured-list", minTokens: 500 },
+  nexus_dispatch_inbox:   { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_dispatch_outbox:  { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_dispatch_get:     { action: "compress", profile: "reference-data",  minTokens: 3000 },
+  nexus_dispatch_related: { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_doc_list:         { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_task_list:        { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_dc_list:          { action: "compress", profile: "structured-list", minTokens: 2000 },
 
-  // session_list rarely exceeds threshold
+  // session_list rarely exceeds threshold — passthrough
   nexus_session_list: { action: "passthrough", reason: "small-response" },
 
-  // Write operations — never compress
+  // ── Layer 2: Write operations — never compress ────────────────────────────
   nexus_session_create: { action: "passthrough", reason: "write-operation" },
   nexus_session_append: { action: "passthrough", reason: "write-operation" },
-  nexus_session_close: { action: "passthrough", reason: "write-operation" },
-  nexus_task_create: { action: "passthrough", reason: "write-operation" },
-  nexus_task_update: { action: "passthrough", reason: "write-operation" },
-  nexus_task_note: { action: "passthrough", reason: "write-operation" },
+  nexus_session_close:  { action: "passthrough", reason: "write-operation" },
+
+  nexus_task_create:  { action: "passthrough", reason: "write-operation" },
+  nexus_task_update:  { action: "passthrough", reason: "write-operation" },
+  nexus_task_note:    { action: "passthrough", reason: "write-operation" },
+  // Fix §10: nexus_task_delete added in nexus-mcp v0.10.1 — explicitly passthrough
+  nexus_task_delete:  { action: "passthrough", reason: "write-operation" },
+
+  nexus_doc_ingest:   { action: "passthrough", reason: "write-operation" },
+  nexus_doc_classify: { action: "passthrough", reason: "write-operation" },
+  nexus_doc_update:   { action: "passthrough", reason: "write-operation" },
+  // Fix §10: nexus_doc_delete added — write-operation, never compress
+  nexus_doc_delete:   { action: "passthrough", reason: "write-operation" },
+
+  nexus_dispatch_create:  { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_reply:   { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_resolve: { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_close:   { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_ack:     { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_assign:  { action: "passthrough", reason: "write-operation" },
+  nexus_dispatch_forward: { action: "passthrough", reason: "write-operation" },
+
+  nexus_dc_add: { action: "passthrough", reason: "write-operation" },
+
   nexus_adr_create: { action: "passthrough", reason: "write-operation" },
   nexus_adr_submit: { action: "passthrough", reason: "write-operation" },
   nexus_adr_decide: { action: "passthrough", reason: "write-operation" },
-  nexus_doc_ingest: { action: "passthrough", reason: "write-operation" },
-  nexus_doc_classify: { action: "passthrough", reason: "write-operation" },
-  nexus_doc_update: { action: "passthrough", reason: "write-operation" },
-  nexus_dispatch_create: { action: "passthrough", reason: "write-operation" },
-  nexus_dispatch_reply: { action: "passthrough", reason: "write-operation" },
-  nexus_dispatch_resolve: { action: "passthrough", reason: "write-operation" },
-  nexus_dispatch_close: { action: "passthrough", reason: "write-operation" },
-  nexus_dispatch_ack: { action: "passthrough", reason: "write-operation" },
 
-  // Retrieval — never compress, must be passed through verbatim
+  // ── Layer 2: Legacy vl_ aliases (vault letter API) ────────────────────────
+  // These are read-only list/inbox tools wrapped with nexus_ prefix by OpenCode.
+  nexus_vl_inbox:  { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_vl_outbox: { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_vl_create: { action: "passthrough", reason: "write-operation" },
+  nexus_vl_reply:  { action: "passthrough", reason: "write-operation" },
+  nexus_vl_ack:    { action: "passthrough", reason: "write-operation" },
+
+  // ── Skills (sk_*) ─────────────────────────────────────────────────────────
+  // sk_list / sk_get / sk_export can be large (body content)
+  nexus_sk_list:    { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_sk_get:     { action: "compress", profile: "reference-data",  minTokens: 2000 },
+  nexus_sk_export:  { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_sk_create:  { action: "passthrough", reason: "write-operation" },
+  nexus_sk_update:  { action: "passthrough", reason: "write-operation" },
+  nexus_sk_activate: { action: "passthrough", reason: "write-operation" },
+  nexus_sk_assign:   { action: "passthrough", reason: "write-operation" },
+  nexus_sk_unassign: { action: "passthrough", reason: "write-operation" },
+
+  // ── Directives (pd_*) ─────────────────────────────────────────────────────
+  nexus_pd_list:           { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_directive_export:  { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_pd_get:            { action: "compress", profile: "reference-data",  minTokens: 2000 },
+  nexus_pd_create: { action: "passthrough", reason: "write-operation" },
+  nexus_pd_update: { action: "passthrough", reason: "write-operation" },
+  nexus_pd_delete: { action: "passthrough", reason: "write-operation" },
+  nexus_pd_toggle: { action: "passthrough", reason: "write-operation" },
+
+  // ── Reviews (rv_*) ────────────────────────────────────────────────────────
+  nexus_rv_list:    { action: "compress", profile: "structured-list", minTokens: 2000 },
+  nexus_rv_get:     { action: "compress", profile: "reference-data",  minTokens: 2000 },
+  nexus_rv_create:  { action: "passthrough", reason: "write-operation" },
+  nexus_rv_decide:  { action: "passthrough", reason: "write-operation" },
+  nexus_rv_comment: { action: "passthrough", reason: "write-operation" },
+
+  // ── Retrieval — never compress, must be passed through verbatim ───────────
   nexus_headroom_retrieve: { action: "passthrough", reason: "explicit-detail-request" },
   headroom_retrieve: { action: "passthrough", reason: "explicit-detail-request" },
   headroom_headroom_retrieve: { action: "passthrough", reason: "explicit-detail-request" },
   // Plugin-owned retrieval tool must also passthrough (handled separately below)
   nexus_headroom_intercept_retrieve: { action: "passthrough", reason: "plugin-retrieval-tool" },
 
-  // Shell — handled by RTK
+  // ── Shell — handled by RTK ────────────────────────────────────────────────
   bash: { action: "skip", reason: "handled-by-rtk" },
   shell: { action: "skip", reason: "handled-by-rtk" },
 
-  // Active editing context — never compress
-  read: { action: "skip", reason: "active-editing-context" },
+  // ── Active editing context — never compress ───────────────────────────────
+  read:  { action: "skip", reason: "active-editing-context" },
   write: { action: "skip", reason: "active-editing-context" },
-  edit: { action: "skip", reason: "active-editing-context" },
-  glob: { action: "skip", reason: "file-search" },
-  grep: { action: "skip", reason: "code-search" },
+  edit:  { action: "skip", reason: "active-editing-context" },
+  glob:  { action: "skip", reason: "file-search" },
+  grep:  { action: "skip", reason: "code-search" },
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,7 +1177,7 @@ function readProjectIdFromAgentsMd(directory: string): string | null {
 
 async function fetchProjectContext(config: NexusConfig, projectId: string): Promise<ProjectContext | null> {
   try {
-    const res = await fetch(`${config.apiUrl}/api/projects/${projectId}/preflight`, {
+    const res = await fetch(`${config.apiUrl}/api/mcp/projects/${projectId}/preflight`, {
       headers: { Authorization: `Bearer ${config.token}` },
       signal: AbortSignal.timeout(5000),
     })
