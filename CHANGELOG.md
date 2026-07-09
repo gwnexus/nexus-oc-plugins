@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.9] - 2026-07-09
+
+### Changed
+- **`nexus-headroom-intercept` v0.5.9** — complete policy map, preflight URL fix, README sync
+  - **Policy map:** 37 → 72 explicit entries; all nexus-mcp tools now covered (`nexus_task_delete`, `nexus_doc_delete`, `nexus_kb_related`, `nexus_dispatch_get/assign/forward/related`, `nexus_dc_add/list`, `nexus_vl_*` legacy aliases, `nexus_sk_*`, `nexus_pd_*`, `nexus_rv_*`, `nexus_project_list`)
+  - **Preflight URL fix:** `/api/projects/:id/preflight` → `/api/mcp/projects/:id/preflight` (PAT-authenticated endpoint, fixes `headroom_enabled: false` regression from v0.5.8)
+  - **Version metadata sync:** `PLUGIN_META.version` updated to `"0.5.9"`, compatibility matrix extended with v0.5.6–v0.5.9 rows
+  - **README:** version badge updated from `0.5.5` → `0.5.9`; policy count and compatibility table reflect current state
+
+> Note: v1.5.8 (plugin v0.5.8) was deployed directly as a nexus-hub hotfix (preflight route auth) and did not receive a standalone oc-plugins release. v1.5.9 bundles the v0.5.8 preflight fix together with the v0.5.9 policy map.
+
 ## [1.5.7] - 2026-07-08
 
 ### Changed
