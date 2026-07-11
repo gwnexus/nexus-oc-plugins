@@ -5,7 +5,7 @@ Pre-injection context compression for Nexus MCP tool outputs.
 Uses the OpenCode `tool.execute.after` hook to apply policy-based deterministic
 compression before tool results enter the agent context window.
 
-**Current version:** `0.5.9`  
+**Current version:** `0.5.10`  
 **Default mode:** `observe` (safe — metrics only, no mutation)  
 **Transform mode:** experimental, requires explicit opt-in and provider-level verification
 
@@ -150,6 +150,7 @@ Activity is logged as structured JSONL to `.nexus/headroom-intercept.jsonl`
 | `v0.9.10`  | `0.5.7`        | `>=1.14`     | `observe`    | §2–§8 fixes |
 | `v0.9.11`  | `0.5.8`        | `>=1.14`     | `observe`    | Preflight URL fix (PAT auth) |
 | `v0.9.12`  | `0.5.9`        | `>=1.14`     | `observe`    | Complete policy map (37→55 entries, nexus-mcp v0.10.1) |
+| `v0.9.12`  | `0.5.10`       | `>=1.14`     | `transform`  | Full UUIDs in compressed list output |
 
 ## Requirements
 

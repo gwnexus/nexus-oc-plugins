@@ -17,6 +17,12 @@ import { createHash } from "node:crypto"
 /**
  * Plugin metadata — single source of truth for name/version.
  *
+ * Version: 0.5.10
+ * Changes from 0.5.9:
+ *   - Fix §11: compressStructuredList now outputs full UUIDs instead of truncated
+ *     8-char prefixes. Agents can use IDs from compressed output directly in
+ *     follow-up tool calls without requiring headroom_retrieve first.
+ *
  * Version: 0.5.9
  * Changes from 0.5.8:
  *   - Fix §10: Complete POLICIES map — all nexus-mcp v0.10.1 tools now have explicit
@@ -49,7 +55,7 @@ import { createHash } from "node:crypto"
  */
 const PLUGIN_META = {
   name: "nexus-headroom-intercept",
-  version: "0.5.9",
+  version: "0.5.10",
   description:
     "Pre-injection context compression for Nexus MCP tool outputs. " +
     "Uses the tool.execute.after hook to apply policy-based deterministic " +
@@ -1053,7 +1059,7 @@ function compressStructuredList(raw: string, parsed: unknown, hash: string, tool
         const title = item.title ?? item.subject ?? item.name ?? "untitled"
         const status = item.status ? `[${item.status}]` : ""
         const prio = item.priority ? ` [${item.priority}]` : ""
-        const id = item.id ? ` (${String(item.id).slice(0, 8)})` : ""
+        const id = item.id ? ` (${String(item.id)})` : ""
         lines.push(`- ${title} ${status}${prio}${id}`)
       }
       if (sortedItems.length > topN)
