@@ -1,6 +1,9 @@
-# Compaction Plus
+# nexus-compaction-plus
 
 An [OpenCode](https://opencode.ai) plugin that preserves [Nexus](https://nexus.gatewarden.eu) session context across compaction events.
+
+**Current version:** `v1.8.0`  
+**Requires:** Nexus MCP server (`NEXUS_API_URL`, `NEXUS_PRIVATE_TOKEN`)
 
 When OpenCode compacts a long conversation, important session metadata — active tasks, recent decisions, project directives — can be lost. This plugin hooks into compaction to:
 
