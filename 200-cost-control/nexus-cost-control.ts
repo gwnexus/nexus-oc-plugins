@@ -169,7 +169,7 @@ function extractNexusState(
 
   for (const msg of messages) {
     for (const rawPart of msg.parts ?? []) {
-      const part = rawPart as ToolPartShape
+      const part = rawPart as unknown as ToolPartShape
       if (part.type !== "tool" && part.type !== "tool-invocation") continue
 
       const toolName = (part.tool ?? part.toolName ?? "") as string

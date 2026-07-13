@@ -150,7 +150,7 @@ function extractNexusState(
 
   for (const msg of messages) {
     for (const rawPart of msg.parts ?? []) {
-      const part = rawPart as ToolPartShape
+      const part = rawPart as unknown as ToolPartShape
 
       // Support both OpenCode SDK shape (type="tool") and legacy shape (type="tool-invocation")
       if (part.type !== "tool" && part.type !== "tool-invocation") continue
@@ -530,7 +530,7 @@ export const NexusCompactionPlus: Plugin = async (ctx) => {
             ? `## Compaction at ${time}\n\nContext preserved via nexus-compaction-plus v${PLUGIN_META.version}.\n\n### Agent Summary\n\n${compactedText}`
             : `## Compaction at ${time}\n\nContext preserved via nexus-compaction-plus v${PLUGIN_META.version}.`
 
-          await appendCompactionEntry(nexusConfig, state.sessionId, summary, directory)
+          await appendCompactionEntry(nexusConfig!, state.sessionId, summary, directory)
 
           fileLog(directory, "info", `Compaction entry recorded in Nexus session ${state.sessionId}`)
           await client.app.log({

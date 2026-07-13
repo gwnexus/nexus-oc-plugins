@@ -1188,8 +1188,8 @@ async function fetchProjectContext(config: NexusConfig, projectId: string): Prom
       signal: AbortSignal.timeout(5000),
     })
     if (!res.ok) return null
-    const data = await res.json()
-    const plugins: string[] = Array.isArray(data.plugins) ? data.plugins : []
+    const data = await res.json() as { plugins?: unknown }
+    const plugins: string[] = Array.isArray(data.plugins) ? data.plugins as string[] : []
     return { projectId, plugins, headroomEnabled: plugins.includes("headroom") }
   } catch { return null }
 }
