@@ -153,6 +153,15 @@ Tracked via Helicone · nexus-cost-control v1.0.0
 | Models              | claude-opus-4|
 ```
 
+## Testing
+
+```bash
+npm test -- 200-cost-control
+```
+
+6 unit tests covering hook registration, tool output, event routing, and
+config handling.
+
 ## License
 
 MIT — see [LICENSE](../LICENSE)

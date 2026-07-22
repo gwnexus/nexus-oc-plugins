@@ -23,6 +23,7 @@ plugin is independently installable via the OpenCode auto-discovery mechanism
 | [**Compaction Plus**](#compaction-plus) | [`100-compaction-plus`](./100-compaction-plus) | `v1.8.0` | `experimental.session.compacting`, `session.compacted` |
 | [**Cost Control**](#cost-control) | [`200-cost-control`](./200-cost-control) | `v1.0.0` | `event (session.idle)` |
 | [**Headroom Intercept**](#headroom-intercept) | [`300-headroom-intercept`](./300-headroom-intercept) | `v0.5.10` | `tool.execute.after` |
+| [**Session Guard**](#session-guard) | [`400-session-guard`](./400-session-guard) | `v1.0.0` | `tool.execute.after`, `event (message.created)` |
 
 ## Compaction Plus
 
@@ -99,6 +100,30 @@ and compression profile. Originals are retrievable via the plugin's own
 **Default mode:** `observe` (metrics only, no mutation -- safe for all environments)  
 **Transform mode:** requires `HEADROOM_MODE=transform`
 
+## Session Guard
+
+**`v1.0.0` · [`400-session-guard`](./400-session-guard)**
+
+Agents frequently skip `nexus_session_append` calls after completing work
+packages, leaving gaps in the session audit trail. This plugin detects
+code-changing tool completions and reminds the agent to append a session entry
+before proceeding.
+
+- **`tool.execute.after`** -- detects trigger tools (`Edit`, `Write`,
+  `MultiEdit`, mutating `Bash`, `nexus_task_create`, `nexus_adr_create`,
+  `nexus_adr_decide`) and injects a `<system-reminder>` into tool output when
+  `nexus_session_append` hasn't been called since the last user instruction.
+
+- **`event (message.created)`** -- tracks user turn index to determine work
+  unit boundaries. The reminder fires once per user turn until an append is
+  recorded.
+
+- **Bash heuristic** -- read-only commands (`cat`, `grep`, `git status`,
+  `ls`, `npm ls`, etc.) are excluded from triggers to avoid false positives.
+
+**Required:** Nexus MCP server (session must be active)  
+**Ref:** ADR-0066
+
 ## Installation
 
 Each plugin is a single `.ts` file. Drop it into `.opencode/plugins/` and
@@ -144,6 +169,9 @@ nexus-oc-plugins/
   300-headroom-intercept/
     nexus-headroom-intercept.ts -- plugin source
     README.md
+  400-session-guard/
+    nexus-session-guard.ts     -- plugin source
+    README.md
 ```
 
 ## Requirements
@@ -162,6 +190,12 @@ npm install
 
 # Type-check all plugins
 npm run typecheck
+
+# Run tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
 ```
 
 ## Related

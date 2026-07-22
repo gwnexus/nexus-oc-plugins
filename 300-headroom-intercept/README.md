@@ -162,6 +162,16 @@ Activity is logged as structured JSONL to `.nexus/headroom-intercept.jsonl`
 
 See ADR-0060: Headroom Pre-Injection Compression via OpenCode Plugin.
 
+## Testing
+
+```bash
+npm test -- 300-headroom-intercept
+```
+
+18 unit tests covering retrieval tool validation (hash format, missing content),
+policy routing (compress/passthrough/skip), error passthrough, threshold gating,
+and policy coverage assertions for all registered Nexus MCP tools.
+
 ## License
 
 MIT — Gatewarden GmbH

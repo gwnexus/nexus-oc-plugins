@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-07-22
+
+### Added
+- **`nexus-session-guard` v1.0.0** (`400-session-guard/`) — enforces session append discipline
+  - Detects code-changing tool completions (`Edit`, `Write`, `MultiEdit`, mutating `Bash`, `nexus_task_create`, `nexus_adr_create`, `nexus_adr_decide`) and injects a `<system-reminder>` into tool output when `nexus_session_append` hasn't been called since the last user instruction
+  - `tool.execute.after` hook — core detection and reminder injection
+  - `event` hook (`message.created`) — tracks user turn index for state machine
+  - Bash heuristic filter — read-only commands (`cat`, `grep`, `git status`, etc.) excluded from triggers to reduce noise
+  - File-based debug log at `.nexus/session-guard.log`
+  - Ref: ADR-0066 (`d5f0735d-bc48-44c9-be2a-96753206a264`, NEXUS-APP)
+
+- **Test suite** — vitest-based unit tests for all four plugins (52 tests)
+  - `100-compaction-plus`: 11 tests — hook registration, context injection, state extraction, compaction lifecycle, legacy shape support
+  - `200-cost-control`: 6 tests — hook registration, tool output, event routing, config handling
+  - `300-headroom-intercept`: 18 tests — retrieval tool validation, policy routing (compress/passthrough/skip), error passthrough, threshold gating, policy coverage assertions
+  - `400-session-guard`: 17 tests — trigger detection, reminder injection, state machine transitions, Bash heuristic, MCP content shape, user turn tracking
+  - Test infrastructure: `vitest` devDependency, `npm test` / `npm run test:watch` scripts, `vitest.config.ts`
+
+### Changed
+- `tsconfig.json` — added `400-session-guard/**/*.ts` to `include`
+- Root README — added session-guard to plugin table, test section in development docs, updated project structure
+
 ## [1.5.10] - 2026-07-11
 
 ### Changed

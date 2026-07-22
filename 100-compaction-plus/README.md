@@ -82,6 +82,15 @@ This creates an auditable trail of compaction events visible in the Nexus sessio
 
 The plugin auto-discovers the active Nexus session and project from MCP tool calls in the conversation history. No additional configuration is needed beyond the MCP server setup.
 
+## Testing
+
+```bash
+npm test -- 100-compaction-plus
+```
+
+11 unit tests covering hook registration, context injection, state extraction,
+compaction lifecycle, and legacy tool-invocation shape support.
+
 ## License
 
 MIT — see [LICENSE](../LICENSE)
