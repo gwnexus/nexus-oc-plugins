@@ -7,7 +7,7 @@ import { join } from "node:path"
  */
 const PLUGIN_META = {
   name: "nexus-session-guard",
-  version: "1.0.0",
+  version: "1.1.0",
   description:
     "Detects code-changing tool completions and reminds the agent to call nexus_session_append before proceeding.",
 } as const
@@ -65,6 +65,13 @@ function isBashReadOnly(input: Record<string, unknown>): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Debounce / batch configuration
+// ---------------------------------------------------------------------------
+
+/** Minimum trigger tool calls before a reminder fires in a single user turn. */
+const TRIGGER_THRESHOLD = 3
+
+// ---------------------------------------------------------------------------
 // Reminder message
 // ---------------------------------------------------------------------------
 
@@ -102,6 +109,8 @@ export const NexusSessionGuard: Plugin = async (ctx) => {
   let lastAppendTurnIndex = 0
   let reminderCount = 0
   let suppressCount = 0
+  let triggerCountThisTurn = 0
+  let reminderFiredThisTurn = false
 
   fileLog(directory, "info", "=== Plugin initializing ===")
   fileLog(directory, "info", `Directory: ${directory}`)
@@ -150,7 +159,10 @@ export const NexusSessionGuard: Plugin = async (ctx) => {
 
       if (!isTrigger) return
 
-      // 3. Check if an append is needed
+      // 3. Increment trigger count for this turn
+      triggerCountThisTurn++
+
+      // 4. Check if an append is needed
       if (lastUserTurnIndex <= lastAppendTurnIndex) {
         suppressCount++
         fileLog(
@@ -161,7 +173,27 @@ export const NexusSessionGuard: Plugin = async (ctx) => {
         return
       }
 
-      // 4. Inject reminder into tool output
+      // 5. Suppress if below threshold or already reminded this turn
+      if (triggerCountThisTurn < TRIGGER_THRESHOLD) {
+        fileLog(
+          directory,
+          "debug",
+          `Trigger tool ${toolName} — below threshold (${triggerCountThisTurn}/${TRIGGER_THRESHOLD}), suppressing`,
+        )
+        return
+      }
+
+      if (reminderFiredThisTurn) {
+        fileLog(
+          directory,
+          "debug",
+          `Trigger tool ${toolName} — reminder already fired this turn, suppressing`,
+        )
+        return
+      }
+
+      // 6. Inject reminder into tool output
+      reminderFiredThisTurn = true
       reminderCount++
       fileLog(
         directory,
@@ -203,10 +235,12 @@ export const NexusSessionGuard: Plugin = async (ctx) => {
           .properties
         if (props?.role === "user") {
           lastUserTurnIndex++
+          triggerCountThisTurn = 0
+          reminderFiredThisTurn = false
           fileLog(
             directory,
             "debug",
-            `User turn ${lastUserTurnIndex} detected`,
+            `User turn ${lastUserTurnIndex} detected — counters reset`,
           )
         }
       }
