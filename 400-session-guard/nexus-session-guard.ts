@@ -7,7 +7,7 @@ import { join } from "node:path"
  */
 const PLUGIN_META = {
   name: "nexus-session-guard",
-  version: "1.1.0",
+  version: "1.1.1",
   description:
     "Detects code-changing tool completions and reminds the agent to call nexus_session_append before proceeding.",
 } as const
@@ -111,6 +111,7 @@ export const NexusSessionGuard: Plugin = async (ctx) => {
   let suppressCount = 0
   let triggerCountThisTurn = 0
   let reminderFiredThisTurn = false
+  let _lastSeenUserMsgId: string | null = null
 
   fileLog(directory, "info", "=== Plugin initializing ===")
   fileLog(directory, "info", `Directory: ${directory}`)
@@ -223,25 +224,31 @@ export const NexusSessionGuard: Plugin = async (ctx) => {
     },
 
     // -----------------------------------------------------------------
-    // event — track user turns via message.created
+    // event — track user turns via message.updated
     // -----------------------------------------------------------------
     event: async ({ event }) => {
       const eventType = event.type as string
 
-      // Track user messages to increment the turn counter.
-      // OpenCode fires message.created when a new user message arrives.
-      if (eventType === "message.created") {
-        const props = (event as unknown as { properties?: { role?: string } })
+      // OpenCode does NOT emit message.created for user messages.
+      // It emits message.updated with properties.info.role === 'user'.
+      // Multiple message.updated events fire per user message (status
+      // transitions, part updates), so we deduplicate by msgId.
+      if (eventType === "message.updated") {
+        const props = (event as unknown as { properties?: { info?: { role?: string; id?: string } } })
           .properties
-        if (props?.role === "user") {
-          lastUserTurnIndex++
-          triggerCountThisTurn = 0
-          reminderFiredThisTurn = false
-          fileLog(
-            directory,
-            "debug",
-            `User turn ${lastUserTurnIndex} detected — counters reset`,
-          )
+        if (props?.info?.role === "user") {
+          const msgId = props.info.id
+          if (msgId && msgId !== _lastSeenUserMsgId) {
+            _lastSeenUserMsgId = msgId
+            lastUserTurnIndex++
+            triggerCountThisTurn = 0
+            reminderFiredThisTurn = false
+            fileLog(
+              directory,
+              "debug",
+              `User turn ${lastUserTurnIndex} detected (msgId=${msgId}) — counters reset`,
+            )
+          }
         }
       }
     },

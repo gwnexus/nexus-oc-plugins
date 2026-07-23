@@ -27,11 +27,24 @@ function makeClient() {
   }
 }
 
+/** Helper to create a user message.updated event with a unique msgId. */
+let _msgCounter = 0
+function userMessageEvent(msgId?: string) {
+  _msgCounter++
+  return {
+    event: {
+      type: "message.updated",
+      properties: { info: { role: "user", id: msgId ?? `msg-${_msgCounter}` } },
+    },
+  }
+}
+
 describe("NexusSessionGuard", () => {
   let hooks: any
   let client: ReturnType<typeof makeClient>
 
   beforeEach(async () => {
+    _msgCounter = 0
     client = makeClient()
     hooks = await NexusSessionGuard({ client, directory: "/tmp/test-project" } as any)
   })
@@ -43,21 +56,19 @@ describe("NexusSessionGuard", () => {
 
   describe("tool.execute.after", () => {
     it("should update tracking when nexus_session_append is called", async () => {
-      // First simulate a user turn
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
-      // Then session_append
       const output = { output: "ok" }
       await hooks["tool.execute.after"]({ tool: "nexus_session_append" }, output)
 
-      // Now an Edit should NOT trigger a reminder (append already recorded)
+      // Edit should NOT trigger a reminder (append already recorded)
       const editOutput = { output: "file edited" }
       await hooks["tool.execute.after"]({ tool: "Edit" }, editOutput)
-      expect(editOutput.output).toBe("file edited") // no reminder appended
+      expect(editOutput.output).toBe("file edited")
     })
 
     it("should NOT inject reminder below trigger threshold", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
       // First two Edits should NOT fire reminder (threshold = 3)
       const output1 = { output: "edit 1" }
@@ -70,9 +81,8 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should inject reminder on reaching trigger threshold", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
-      // Fire 3 trigger tools — 3rd should get the reminder
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e1" })
       await hooks["tool.execute.after"]({ tool: "Write" }, { output: "e2" })
 
@@ -83,9 +93,8 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should inject reminder for MCP trigger tools at threshold", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
-      // Use MCP tools to reach threshold
       await hooks["tool.execute.after"]({ tool: "nexus_task_create" }, { content: [{ type: "text", text: "ok" }] })
       await hooks["tool.execute.after"]({ tool: "nexus_adr_create" }, { content: [{ type: "text", text: "ok" }] })
 
@@ -96,7 +105,7 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should inject reminder for mutating Bash at threshold", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e1" })
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e2" })
@@ -107,9 +116,8 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should only fire ONE reminder per user turn", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
-      // Reach threshold — 3rd gets reminder
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e1" })
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e2" })
       const output3 = { output: "e3" }
@@ -123,7 +131,7 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should NOT trigger for read-only Bash commands", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
       const readOnlyCommands = [
         "cat file.txt",
@@ -144,7 +152,7 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should NOT trigger for non-trigger tools", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
       const output = { output: "result" }
       await hooks["tool.execute.after"]({ tool: "Read" }, output)
@@ -152,19 +160,16 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should NOT trigger before any user turn", async () => {
-      // No user event — lastUserTurnIndex is 0, lastAppendTurnIndex is 0
       const output = { output: "file edited" }
       await hooks["tool.execute.after"]({ tool: "Edit" }, output)
       expect(output.output).toBe("file edited")
     })
 
     it("should suppress after append even above threshold", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
-      // Agent calls session_append before any edits
       await hooks["tool.execute.after"]({ tool: "nexus_session_append" }, {})
 
-      // Multiple Edits should NOT trigger — append already recorded
       for (let i = 0; i < 5; i++) {
         const output = { output: `edit ${i}` }
         await hooks["tool.execute.after"]({ tool: "Edit" }, output)
@@ -173,13 +178,12 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should trigger again after a new user turn", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
       await hooks["tool.execute.after"]({ tool: "nexus_session_append" }, {})
 
       // New user turn — counters reset
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
-      // Need to reach threshold again
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e1" })
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e2" })
 
@@ -195,9 +199,8 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should handle MCP content array output shape", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
 
-      // Reach threshold with MCP calls
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e1" })
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e2" })
 
@@ -211,10 +214,9 @@ describe("NexusSessionGuard", () => {
 
   describe("event handler", () => {
     it("should increment turn counter on user messages", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
-      await hooks.event({ event: { type: "message.created", properties: { role: "user" } } })
+      await hooks.event(userMessageEvent())
+      await hooks.event(userMessageEvent())
 
-      // Two user turns, no appends — reach threshold then Edit should trigger
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e1" })
       await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e2" })
       const output = { output: "e3" }
@@ -223,17 +225,35 @@ describe("NexusSessionGuard", () => {
     })
 
     it("should NOT increment on assistant messages", async () => {
-      await hooks.event({ event: { type: "message.created", properties: { role: "assistant" } } })
+      await hooks.event({
+        event: {
+          type: "message.updated",
+          properties: { info: { role: "assistant", id: "asst-1" } },
+        },
+      })
 
-      // No user turn recorded — Edit should NOT trigger
       const output = { output: "edit" }
       await hooks["tool.execute.after"]({ tool: "Edit" }, output)
       expect(output.output).toBe("edit")
     })
 
-    it("should ignore non-message.created events", async () => {
+    it("should deduplicate repeated message.updated events with same msgId", async () => {
+      // Same msgId fired multiple times — should only count as one turn
+      await hooks.event(userMessageEvent("dup-msg-1"))
+      await hooks.event(userMessageEvent("dup-msg-1"))
+      await hooks.event(userMessageEvent("dup-msg-1"))
+
+      // Should behave as 1 user turn — reach threshold
+      await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e1" })
+      await hooks["tool.execute.after"]({ tool: "Edit" }, { output: "e2" })
+      const output = { output: "e3" }
+      await hooks["tool.execute.after"]({ tool: "Edit" }, output)
+      expect(output.output).toContain("[nexus-session-guard]")
+    })
+
+    it("should ignore non-message.updated events", async () => {
       await hooks.event({ event: { type: "session.idle" } })
-      await hooks.event({ event: { type: "message.updated" } })
+      await hooks.event({ event: { type: "message.created" } })
 
       const output = { output: "edit" }
       await hooks["tool.execute.after"]({ tool: "Edit" }, output)
