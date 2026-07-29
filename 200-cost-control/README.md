@@ -3,7 +3,7 @@
 An [OpenCode](https://opencode.ai) plugin that surfaces token usage and cost
 visibility inside [Nexus](https://nexus.gatewarden.eu) sessions.
 
-**Current version:** `v1.0.0`  
+**Current version:** `v1.0.1`  
 **Tracking mechanism:** [Helicone](https://helicone.ai) LLM observability proxy  
 **Requires:** `HELICONE_API_KEY`, `NEXUS_API_URL`, `NEXUS_PRIVATE_TOKEN`
 
@@ -139,7 +139,7 @@ The agent can call this at any time to get a live cost snapshot:
 ```
 ## Token & Cost Summary — 14:32
 
-Tracked via Helicone · nexus-cost-control v1.0.0
+Tracked via Helicone · nexus-cost-control v1.0.1
 
 | Metric              | Value        |
 |---------------------|--------------|
@@ -164,4 +164,4 @@ config handling.
 
 ## License
 
-MIT — see [LICENSE](../LICENSE)
+Apache-2.0 — Copyright 2025-2026 RELICFROG Holding UG, contributed by Patrick Paechatz. See [LICENSE](../LICENSE).

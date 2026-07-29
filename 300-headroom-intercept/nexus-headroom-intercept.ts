@@ -1,4 +1,4 @@
-import { type Plugin } from "@opencode-ai/plugin"
+import { type Plugin, tool } from "@opencode-ai/plugin"
 import {
   writeFileSync,
   readFileSync,
@@ -16,6 +16,18 @@ import { createHash } from "node:crypto"
 
 /**
  * Plugin metadata — single source of truth for name/version.
+ *
+ * Version: 0.5.12
+ * Changes from 0.5.10:
+ *   - Fix §12: retrieval tool was never registered — used wrong SDK API.
+ *     Changed from `tools: [{ name, parameters, execute }]` (array syntax)
+ *     to `tool: { name: tool({ description, args, execute }) }` (object syntax
+ *     with tool() helper + Zod schema args). execute() now returns string
+ *     (JSON.stringify) instead of object.
+ *   - Removed max_lines/max_chars/allow_full params from retrieval tool args.
+ *     Retrieval now always uses env-configurable hard limits
+ *     (HEADROOM_RETRIEVAL_MAX_LINES / HEADROOM_RETRIEVAL_MAX_CHARS).
+ *   - Removed ALLOW_FULL_RETRIEVAL gate (no longer exposed to agent).
  *
  * Version: 0.5.10
  * Changes from 0.5.9:
@@ -55,7 +67,7 @@ import { createHash } from "node:crypto"
  */
 const PLUGIN_META = {
   name: "nexus-headroom-intercept",
-  version: "0.5.10",
+  version: "0.5.13",
   description:
     "Pre-injection context compression for Nexus MCP tool outputs. " +
     "Uses the tool.execute.after hook to apply policy-based deterministic " +
@@ -178,14 +190,6 @@ function parseBoundedPositiveInt(raw: string | undefined, fallback: number, abso
   if (!Number.isFinite(parsed) || parsed < 1) return fallback
   return Math.min(parsed, absoluteMax)
 }
-
-/**
- * Full-retrieval gate: when false (default), allow_full=true in the retrieval tool
- * is silently ignored and bounded limits are always enforced.
- * Set HEADROOM_ALLOW_FULL_RETRIEVAL=true to permit agent-requested full dumps.
- * Recommended: leave false in production to prevent LLM context-size bypasses.
- */
-const ALLOW_FULL_RETRIEVAL = process.env.HEADROOM_ALLOW_FULL_RETRIEVAL === "true"
 
 /**
  * Retrieval hard caps — env-configurable, validated positive integers.
@@ -1388,44 +1392,30 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
     // -----------------------------------------------------------------------
     // nexus_headroom_intercept_retrieve — Fix 4: plugin-owned retrieval tool
     // Resolves the CCR gap: compact outputs now point here, not to headroom MCP.
+    // Fix §12 (v0.5.12): Use tool: {} object syntax with tool() helper + Zod args.
+    // Previous tools: [] array syntax was silently ignored by OpenCode SDK,
+    // meaning the retrieval tool was never registered in the agent's tool list.
     // -----------------------------------------------------------------------
-    tools: [
-      {
-        name: "nexus_headroom_intercept_retrieve",
+    tool: {
+      nexus_headroom_intercept_retrieve: tool({
         description:
           "Retrieve the original uncompressed content stored by the nexus-headroom-intercept plugin. " +
           "Use this when you need the full content behind a [HEADROOM:v1] compressed result. " +
           "Pass the hash from the compressed output.",
-        parameters: {
-          type: "object" as const,
-          properties: {
-            hash: {
-              type: "string",
-              description: "The SHA-256 content hash from the [HEADROOM:v1] header.",
-            },
-            query: {
-              type: "string",
-              description: "Optional: a search query to return only relevant lines from the original.",
-            },
-          },
-          required: ["hash"],
+        args: {
+          hash: tool.schema.string().describe("The SHA-256 content hash from the [HEADROOM:v1] header."),
+          query: tool.schema.string().optional().describe("Optional: a search query to return only relevant lines from the original."),
         },
-        execute: async ({ hash, query, max_lines, max_chars, allow_full }: {
-          hash: string
-          query?: string
-          max_lines?: number
-          max_chars?: number
-          allow_full?: boolean
-        }) => {
+        async execute({ hash, query }) {
           // Fix 6.5: validate hash format — must be exactly 64 hex chars (full SHA-256)
           // Guards against path traversal, malformed input, and accidental misuse.
           if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) {
-            return {
+            return JSON.stringify({
               found: false,
               hash: hash ?? "",
               error: "invalid_hash",
               message: "Hash must be a 64-character lowercase hexadecimal string (full SHA-256).",
-            }
+            })
           }
 
           const content = store.get(hash)
@@ -1435,27 +1425,20 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
             found: content !== null,
             query_present: query != null && query.trim().length > 0,
             query_length: query ? query.length : 0,
-            max_lines: max_lines ?? null,
-            max_chars: max_chars ?? null,
-            allow_full: allow_full ?? false,
           })
           if (!content) {
-            return {
+            return JSON.stringify({
               found: false,
               hash,
               message:
                 "Content not found in plugin cache. It may have expired (TTL: 24h) or " +
                 "this hash was generated in a previous session. Re-fetch using the original tool.",
-            }
+            })
           }
 
-          // Fix 4.1: use env-configurable limits (default 200 lines / 24,000 chars)
-          const MAX_LINES_HARD = RETRIEVAL_MAX_LINES_HARD
-          const MAX_CHARS_HARD = RETRIEVAL_MAX_CHARS_HARD
-          const safeLines = Number.isFinite(max_lines) ? max_lines! : 100
-          const safeChars = Number.isFinite(max_chars) ? max_chars! : 12_000
-          const effectiveMaxLines = Math.min(Math.max(1, Math.floor(safeLines)), MAX_LINES_HARD)
-          const effectiveMaxChars = Math.min(Math.max(1, Math.floor(safeChars)), MAX_CHARS_HARD)
+          // Fix §12: simplified retrieval — use hard limits from env config directly
+          const effectiveMaxLines = RETRIEVAL_MAX_LINES_HARD
+          const effectiveMaxChars = RETRIEVAL_MAX_CHARS_HARD
 
           if (query && query.trim()) {
             const qLower = query.toLowerCase()
@@ -1463,7 +1446,7 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
             const matched = lines.filter(l => l.toLowerCase().includes(qLower))
 
             if (matched.length === 0) {
-              return {
+              return JSON.stringify({
                 found: true,
                 hash,
                 query,
@@ -1472,12 +1455,12 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
                 returned_chars: 0,
                 content: null,
                 message: "No lines matched the query. Refine the query or omit it to retrieve a bounded excerpt.",
-              }
+              })
             }
 
             // Fix 6.4b + Fix 4.2: bounded slice, metadata, wrapped as untrusted
             const bounded = matched.slice(0, effectiveMaxLines).join("\n").slice(0, effectiveMaxChars)
-            return {
+            return JSON.stringify({
               found: true,
               hash,
               query,
@@ -1486,57 +1469,31 @@ export const NexusHeadroomIntercept: Plugin = async (ctx) => {
               returned_chars: bounded.length,
               truncated: matched.length > effectiveMaxLines || bounded.length < matched.slice(0, effectiveMaxLines).join("\n").length,
               content: wrapRetrievedContent(bounded),
-            }
+            })
           }
 
-          // No query — bounded excerpt unless allow_full is requested AND permitted
-          // Fix P1: ALLOW_FULL_RETRIEVAL=false (default) blocks agent-controlled full dumps
-          // to prevent LLM context-size bypasses via allow_full=true.
-          const fullRequested = allow_full === true
-          const fullPermitted = ALLOW_FULL_RETRIEVAL
-          if (!fullRequested || !fullPermitted) {
-             const lines = content.split("\n")
-             const sliced = lines.slice(0, effectiveMaxLines).join("\n")
-             const excerpt = sliced.slice(0, effectiveMaxChars)
-             const truncated = lines.length > effectiveMaxLines || excerpt.length < sliced.length
-             // Fix 2.7: emit metric events
-             if (!fullPermitted && fullRequested) {
-               metrics.totalFullRetrievalDenied++
-               logger.log("info", "full_retrieval_denied", { hash, tool: "nexus_headroom_intercept_retrieve" })
-             }
-             const hint = !fullPermitted && fullRequested
-               ? `Full retrieval is disabled by policy (HEADROOM_ALLOW_FULL_RETRIEVAL=false). Use a focused query or increase max_lines/max_chars.`
-               : truncated
-                 ? `Showing first ${effectiveMaxLines} lines / ${effectiveMaxChars} chars. Set HEADROOM_ALLOW_FULL_RETRIEVAL=true to enable full retrieval.`
-                 : undefined
-             return {
-               found: true,
-               hash,
-              returned_lines: excerpt.split("\n").length,
-              returned_chars: excerpt.length,
-              total_lines: lines.length,
-              total_chars: content.length,
-              truncated,
-              content: wrapRetrievedContent(excerpt),  // Fix 4.2
-              message: hint,
-            }
-          }
-
-          // allow_full=true AND HEADROOM_ALLOW_FULL_RETRIEVAL=true — return complete original
+          // No query — bounded excerpt with hard limits
           const lines = content.split("\n")
-          return {
+          const sliced = lines.slice(0, effectiveMaxLines).join("\n")
+          const excerpt = sliced.slice(0, effectiveMaxChars)
+          const truncated = lines.length > effectiveMaxLines || excerpt.length < sliced.length
+          const hint = truncated
+            ? `Showing first ${effectiveMaxLines} lines / ${effectiveMaxChars} chars. Use a query param to filter for specific content.`
+            : undefined
+          return JSON.stringify({
             found: true,
             hash,
-            returned_lines: lines.length,
-            returned_chars: content.length,
+            returned_lines: excerpt.split("\n").length,
+            returned_chars: excerpt.length,
             total_lines: lines.length,
             total_chars: content.length,
-            truncated: false,
-            content: wrapRetrievedContent(content),  // Fix 4.2
-          }
+            truncated,
+            content: wrapRetrievedContent(excerpt),
+            message: hint,
+          })
         },
-      },
-    ],
+      }),
+    },
 
     // -----------------------------------------------------------------------
     // tool.execute.after — core interception hook

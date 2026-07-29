@@ -5,7 +5,7 @@
 [![Node.js 22+](https://img.shields.io/badge/node-22%2B-green.svg)](https://nodejs.org)
 [![OpenCode 1.14+](https://img.shields.io/badge/opencode-1.14%2B-black.svg)](https://opencode.ai)
 
-OpenCode plugins for the [Gatewarden Nexus](https://nexus.gatewarden.eu) platform.
+OpenCode plugins for the [Nexus](https://nexus.gatewarden.eu) platform.
 
 These plugins extend OpenCode with deep Nexus integration. Each plugin targets a
 specific problem in the agent lifecycle: session continuity across compaction
@@ -18,16 +18,16 @@ plugin is independently installable via the OpenCode auto-discovery mechanism
 
 ## Plugins
 
-| Plugin | Directory | Version | Hook(s) |
-| --- | --- | --- | --- |
-| [**Compaction Plus**](#compaction-plus) | [`100-compaction-plus`](./100-compaction-plus) | `v1.8.0` | `experimental.session.compacting`, `session.compacted` |
-| [**Cost Control**](#cost-control) | [`200-cost-control`](./200-cost-control) | `v1.0.0` | `event (session.idle)` |
-| [**Headroom Intercept**](#headroom-intercept) | [`300-headroom-intercept`](./300-headroom-intercept) | `v0.5.10` | `tool.execute.after` |
-| [**Session Guard**](#session-guard) | [`400-session-guard`](./400-session-guard) | `v1.0.0` | `tool.execute.after`, `event (message.created)` |
+| Plugin | Version | Description |
+| --- | --- | --- |
+| [**Compaction Plus**](./100-compaction-plus/README.md) | `v1.8.1` | Preserves Nexus session context across OpenCode compaction events |
+| [**Cost Control**](./200-cost-control/README.md) | `v1.0.1` | Token usage and cost tracking via native message data |
+| [**Headroom Intercept**](./300-headroom-intercept/README.md) | `v0.5.13` | Pre-injection context compression for Nexus MCP tool outputs |
+| [**Session Guard**](./400-session-guard/README.md) | `v1.1.2` | Enforces session append discipline after code-changing tool calls |
 
 ## Compaction Plus
 
-**`v1.8.0` · [`100-compaction-plus`](./100-compaction-plus)**
+**`v1.8.1` · [`100-compaction-plus`](./100-compaction-plus)**
 
 OpenCode compacts long conversations to manage context budget. During
 compaction, the LLM generates a continuation summary from the conversation
@@ -50,7 +50,7 @@ This plugin solves that by hooking directly into the compaction lifecycle:
 
 ## Cost Control
 
-**`v1.0.0` · [`200-cost-control`](./200-cost-control)**
+**`v1.0.1` · [`200-cost-control`](./200-cost-control)**
 
 Makes token usage and cost visible in the Nexus session timeline by connecting
 [Helicone](https://helicone.ai) -- an LLM observability proxy -- to the Nexus
@@ -74,7 +74,7 @@ removing the Helicone dependency.
 
 ## Headroom Intercept
 
-**`v0.5.10` · [`300-headroom-intercept`](./300-headroom-intercept)**
+**`v0.5.13` · [`300-headroom-intercept`](./300-headroom-intercept)**
 
 Nexus MCP tools can return large payloads -- `kb_memory` at `depth: deep`,
 `dispatch_inbox` with many entries, `kb_search` result sets -- that consume
@@ -102,7 +102,7 @@ and compression profile. Originals are retrievable via the plugin's own
 
 ## Session Guard
 
-**`v1.0.0` · [`400-session-guard`](./400-session-guard)**
+**`v1.1.2` · [`400-session-guard`](./400-session-guard)**
 
 Agents frequently skip `nexus_session_append` calls after completing work
 packages, leaving gaps in the session audit trail. This plugin detects
@@ -180,7 +180,7 @@ nexus-oc-plugins/
 - Node.js `>= 22` (for local typecheck)
 - Nexus platform account with MCP access configured
 - `NEXUS_API_URL` and `NEXUS_PRIVATE_TOKEN` environment variables
-- `HELICONE_API_KEY` for `nexus-cost-control` (v1.0.0 only)
+- `HELICONE_API_KEY` for `nexus-cost-control` (v1.0.x only)
 
 ## Development
 
@@ -206,4 +206,4 @@ npm run test:watch
 
 ## License
 
-Apache-2.0 -- see [LICENSE](./LICENSE)
+Apache-2.0 — Copyright 2025-2026 RELICFROG Holding UG, contributed by Patrick Paechatz. See [LICENSE](./LICENSE).

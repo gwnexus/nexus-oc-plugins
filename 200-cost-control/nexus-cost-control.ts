@@ -7,7 +7,7 @@ import { join } from "node:path"
  */
 const PLUGIN_META = {
   name: "nexus-cost-control",
-  version: "1.0.0",
+  version: "1.0.1",
   description:
     "Token usage and cost tracking for Nexus sessions via Helicone. " +
     "Wraps Helicone's LLM observability API to surface per-session token " +

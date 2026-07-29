@@ -7,7 +7,7 @@ import { join } from "node:path"
  */
 const PLUGIN_META = {
   name: "nexus-session-guard",
-  version: "1.1.1",
+  version: "1.1.2",
   description:
     "Detects code-changing tool completions and reminds the agent to call nexus_session_append before proceeding.",
 } as const

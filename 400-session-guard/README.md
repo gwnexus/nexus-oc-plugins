@@ -3,7 +3,7 @@
 An [OpenCode](https://opencode.ai) plugin that enforces session append discipline
 for the [Nexus](https://nexus.gatewarden.eu) platform.
 
-**Current version:** `v1.0.0`  
+**Current version:** `v1.1.2`  
 **Requires:** Nexus MCP server (active session)
 
 ## What it does
@@ -75,4 +75,4 @@ See ADR-0066: Session Guard Plugin (`d5f0735d-bc48-44c9-be2a-96753206a264`, NEXU
 
 ## License
 
-Apache-2.0 — see [LICENSE](../LICENSE)
+Apache-2.0 — Copyright 2025-2026 RELICFROG Holding UG, contributed by Patrick Paechatz. See [LICENSE](../LICENSE).

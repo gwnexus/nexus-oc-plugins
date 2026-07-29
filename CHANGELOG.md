@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-07-29
+
+### Changed
+- **License:** MIT → Apache-2.0 across all files; copyright holder updated to RELICFROG Holding UG, contributed by Patrick Paechatz
+- **`nexus-compaction-plus` v1.8.1** — license metadata only (no functional changes)
+- **`nexus-cost-control` v1.0.1** — license metadata only (no functional changes)
+- **`nexus-headroom-intercept` v0.5.13** — license metadata only (no functional changes)
+- **`nexus-session-guard` v1.1.2** — license metadata only (no functional changes)
+
+### Fixed
+- Root `LICENSE` file contained MIT text while README claimed Apache-2.0 — replaced with full Apache-2.0 license text
+- Removed stale "Gatewarden GmbH" copyright references from all plugin READMEs
+- Synced session-guard README version (`v1.0.0` → `v1.1.2`) to match actual plugin code
+
 ## [1.6.0] - 2026-07-22
 
 ### Added

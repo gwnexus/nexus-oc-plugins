@@ -7,7 +7,7 @@ import { join } from "node:path"
  */
 const PLUGIN_META = {
   name: "nexus-compaction-plus",
-  version: "1.8.0",
+  version: "1.8.1",
   description:
     "Preserves Nexus session context across compaction and records compaction events in the active session.",
 } as const
