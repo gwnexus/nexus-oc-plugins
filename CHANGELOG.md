@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] - 2026-07-29
+
+### Fixed
+- **`nexus-headroom-intercept` tests** — updated test mock to include `tool.schema` namespace (required since v0.5.12 switched to `tool()` helper with Zod args); updated test assertions from legacy `hooks.tools[]` array format to current `hooks.tool.{}` object format
+
 ## [1.6.1] - 2026-07-29
 
 ### Changed

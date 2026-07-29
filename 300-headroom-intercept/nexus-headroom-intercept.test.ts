@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 // Mock @opencode-ai/plugin
-vi.mock("@opencode-ai/plugin", () => ({
-  tool: (def: any) => def,
-}))
+vi.mock("@opencode-ai/plugin", () => {
+  const mockSchema = {
+    string: () => ({ optional: () => ({ describe: () => ({}) }), describe: () => ({}) }),
+  }
+  const toolFn: any = (def: any) => def
+  toolFn.schema = mockSchema
+  return { tool: toolFn }
+})
 
 // Mock fs — headroom needs many fs functions
 vi.mock("node:fs", async () => {
@@ -49,37 +54,35 @@ describe("NexusHeadroomIntercept", () => {
   it("should return expected hook structure", () => {
     expect(hooks["tool.execute.after"]).toBeTypeOf("function")
     expect(hooks.event).toBeTypeOf("function")
-    expect(hooks.tools).toBeInstanceOf(Array)
-    expect(hooks.tools.length).toBeGreaterThan(0)
+    expect(hooks.tool).toBeDefined()
+    expect(hooks.tool.nexus_headroom_intercept_retrieve).toBeDefined()
   })
 
   describe("retrieval tool", () => {
     it("should be registered as nexus_headroom_intercept_retrieve", () => {
-      const retrieveTool = hooks.tools.find(
-        (t: any) => t.name === "nexus_headroom_intercept_retrieve"
-      )
+      const retrieveTool = hooks.tool.nexus_headroom_intercept_retrieve
       expect(retrieveTool).toBeDefined()
-      expect(retrieveTool.parameters.required).toContain("hash")
+      expect(retrieveTool.args.hash).toBeDefined()
     })
 
     it("should reject invalid hash format", async () => {
-      const retrieveTool = hooks.tools[0]
-      const result = await retrieveTool.execute({ hash: "not-a-hash" })
+      const retrieveTool = hooks.tool.nexus_headroom_intercept_retrieve
+      const result = JSON.parse(await retrieveTool.execute({ hash: "not-a-hash" }))
       expect(result.found).toBe(false)
       expect(result.error).toBe("invalid_hash")
     })
 
     it("should reject short hash", async () => {
-      const retrieveTool = hooks.tools[0]
-      const result = await retrieveTool.execute({ hash: "abcdef12" })
+      const retrieveTool = hooks.tool.nexus_headroom_intercept_retrieve
+      const result = JSON.parse(await retrieveTool.execute({ hash: "abcdef12" }))
       expect(result.found).toBe(false)
       expect(result.error).toBe("invalid_hash")
     })
 
     it("should return not found for valid but missing hash", async () => {
-      const retrieveTool = hooks.tools[0]
+      const retrieveTool = hooks.tool.nexus_headroom_intercept_retrieve
       const validHash = "a".repeat(64)
-      const result = await retrieveTool.execute({ hash: validHash })
+      const result = JSON.parse(await retrieveTool.execute({ hash: validHash }))
       expect(result.found).toBe(false)
       expect(result.hash).toBe(validHash)
     })
