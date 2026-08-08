@@ -1,0 +1,31 @@
+# Cursor Rules — NEXUS-OpenCode-Plugins
+
+## Project Context
+
+This workspace is managed by the Nexus platform.
+Treat all project memory and coordination artifacts as architecture-critical.
+
+## Code Style
+
+- Use TypeScript strict mode
+- Prefer named exports over default exports
+- Use early returns to reduce nesting
+- Keep functions under 50 lines where possible
+
+## Architecture
+
+- Follow existing patterns in the codebase
+- Document decisions as ADRs when making architectural changes
+- Preserve auditability — commit early and often
+
+## Testing
+
+- Write tests for new functionality
+- Maintain existing test coverage
+- Run the test suite before committing
+
+## Security
+
+- Never expose secrets in code or logs
+- Read secrets only from environment variables
+- Never commit .env files
