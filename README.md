@@ -25,6 +25,7 @@ plugin is independently installable via the OpenCode auto-discovery mechanism
 | [**Headroom Intercept**](./300-headroom-intercept/README.md) | `v0.5.13` | Pre-injection context compression for Nexus MCP tool outputs |
 | [**Session Guard**](./400-session-guard/README.md) | `v1.1.2` | Enforces session append discipline after code-changing tool calls |
 | [**Routing Guard**](./500-routing-guard/README.md) | `v1.0.0` | Detects model routing divergence between Nexus config and the effective OpenCode provider catalog |
+| [**Attribution Headers**](./600-attribution-headers/README.md) | `v1.0.0` | Injects session/actor attribution headers on outgoing requests to the Nexus gateway provider |
 
 ## Compaction Plus
 
@@ -149,6 +150,28 @@ provider can be entirely valid while a single model id is wrong.
 **Required:** none (no Nexus MCP session needed)  
 **Ref:** ADR-0001
 
+## Attribution Headers
+
+**`v1.0.0` · [`600-attribution-headers`](./600-attribution-headers)**
+
+The Nexus gateway records usage events for cost and routing analytics, but
+without session/actor attribution headers on the outgoing request, it has
+no way to tell which OpenCode session or agent a given request belongs to.
+This plugin closes that gap.
+
+- **`chat.headers`** -- when the request is routed through the `nexus`
+  provider, sets `x-nexus-session-id` always, plus either
+  `x-nexus-primary-slot` (for `nexus-plan`/`nexus-act`/`nexus-review`) or
+  `x-nexus-actor-slug` (for every other agent name, including OpenCode's
+  own internal calls). Attribution-only; never used for routing or auth.
+
+- **Provider-scoped** -- guards on the runtime shape of `input.provider`,
+  which does not match the hook's documented TypeScript type (see the
+  plugin README for the discrepancy). Never touches non-`nexus` providers.
+
+**Required:** none (no Nexus MCP session needed)  
+**Ref:** dispatch `5999b7d6` (NEXUS-APP)
+
 ## Installation
 
 Each plugin is a single `.ts` file. Drop it into `.opencode/plugins/` and
@@ -199,6 +222,9 @@ nexus-oc-plugins/
     README.md
   500-routing-guard/
     nexus-routing-guard.ts     -- plugin source
+    README.md
+  600-attribution-headers/
+    nexus-attribution-headers.ts -- plugin source
     README.md
 ```
 

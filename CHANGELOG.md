@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-09-10
+
+### Added
+- **`nexus-attribution-headers` v1.0.0** (`600-attribution-headers/`) -- injects `x-nexus-session-id` plus `x-nexus-primary-slot`/`x-nexus-actor-slug` on outgoing chat requests via the `chat.headers` hook, scoped strictly to `provider.id === "nexus"`. Closes a gap where `session_id`/`actor_slug`/`primary_slot` were null on 100% of gateway `model_usage_events`. Verified empirically on the wire (real outgoing request headers captured via a throwaway plugin and a stand-in HTTP server) rather than built against the type signature alone; found and documented a real discrepancy between the `chat.headers` hook's declared `ProviderContext` type and the flat `Provider` shape it actually receives at runtime. Stateless, never blocks or throws, no config, no MCP dependency. See dispatch `5999b7d6` (NEXUS-APP).
+
 ## [1.7.1] - 2026-09-10
 
 ### Added
