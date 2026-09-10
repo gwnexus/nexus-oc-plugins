@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-09-10
+
+### Added
+- **`nexus-routing-guard` v1.0.0** (`500-routing-guard/`) -- detects model routing divergence between Nexus-configured agent routing and the effective merged provider/model catalog of the running OpenCode instance. Reads `client.config.providers()` and `client.app.agents()` directly, no config file parsing. Checks at model granularity (`unknown_model`) in addition to provider granularity (`unknown_provider`), since a provider can be entirely valid while a single model id is wrong. Silent when clean, one-shot deterministic tool-output banner plus system-prompt injection when divergence is detected, never blocks or slows session start. Opt-out via `NEXUS_ROUTING_GUARD_ENABLED=false`. See ADR-0001 and dispatch `46bc744a` (NEXUS-APP).
+
 ## [1.6.2] - 2026-07-29
 
 ### Fixed

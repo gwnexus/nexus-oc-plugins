@@ -24,6 +24,7 @@ plugin is independently installable via the OpenCode auto-discovery mechanism
 | [**Cost Control**](./200-cost-control/README.md) | `v1.0.1` | Token usage and cost tracking via native message data |
 | [**Headroom Intercept**](./300-headroom-intercept/README.md) | `v0.5.13` | Pre-injection context compression for Nexus MCP tool outputs |
 | [**Session Guard**](./400-session-guard/README.md) | `v1.1.2` | Enforces session append discipline after code-changing tool calls |
+| [**Routing Guard**](./500-routing-guard/README.md) | `v1.0.0` | Detects model routing divergence between Nexus config and the effective OpenCode provider catalog |
 
 ## Compaction Plus
 
@@ -124,6 +125,30 @@ before proceeding.
 **Required:** Nexus MCP server (session must be active)  
 **Ref:** ADR-0066
 
+## Routing Guard
+
+**`v1.0.0` · [`500-routing-guard`](./500-routing-guard)**
+
+Nexus writes agent-to-provider/model routing into a project's
+`opencode.json`, but that routing can silently diverge from what the running
+OpenCode instance can actually serve (merged global + project provider
+catalog). This plugin detects the divergence directly from the running
+server, at model granularity rather than provider granularity, since a
+provider can be entirely valid while a single model id is wrong.
+
+- **`experimental.chat.system.transform`** -- reliably informs the agent of
+  any divergence and instructs it to relay the warning to the operator.
+
+- **`tool.execute.after`** -- injects a deterministic, one-shot banner into
+  the first tool call's output of the session when a divergence is detected.
+  Silent when the config is clean; never repeats within a session.
+
+- **Warning codes:** `unknown_provider` (provider absent from the instance
+  catalog), `unknown_model` (provider present, model id not in its catalog).
+
+**Required:** none (no Nexus MCP session needed)  
+**Ref:** ADR-0001
+
 ## Installation
 
 Each plugin is a single `.ts` file. Drop it into `.opencode/plugins/` and
@@ -171,6 +196,9 @@ nexus-oc-plugins/
     README.md
   400-session-guard/
     nexus-session-guard.ts     -- plugin source
+    README.md
+  500-routing-guard/
+    nexus-routing-guard.ts     -- plugin source
     README.md
 ```
 
