@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-09-10
+
+### Added
+- **`scripts/devbox/`** -- committed the devbox tooling scripts referenced by `devbox.json` (init hook, OS-specific overrides for darwin/linux/wsl/win64, tmux 2-pane/3-pane launchers, and `ops/` helpers for local environment check, repo validation, and a basic secrets-pattern scan). These were tracked in `devbox.json`/`devbox.lock` since a prior commit but the referenced script directory itself had not been committed yet.
+
+### Note
+- `dbx_tmux_2w.sh` / `dbx_tmux_3w.sh` reference `init/tmuxp_2w.yaml` / `init/tmuxp_3w.yaml`, which do not exist yet; the tmux shell scripts (`devbox run tmux-2w` / `tmux-3w`) will fail until those tmuxp layouts are added in a follow-up.
+
 ## [1.7.0] - 2026-09-10
 
 ### Added
